@@ -1,8 +1,8 @@
 # implicit viscosity solver implemented as paper "A Physically Consistent Implicit Viscosity Solver for SPH Fluids"
 import taichi as ti
 import numpy as np
-from ..containers import BaseContainer
-from ..rigid_solver import PyBulletSolver
+from containers import BaseContainer
+from rigid_solver import PyBulletSolver
 
 @ti.data_oriented
 class BaseSolver():

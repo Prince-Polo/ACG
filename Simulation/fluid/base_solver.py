@@ -1,11 +1,21 @@
 # implicit viscosity solver implemented as paper "A Physically Consistent Implicit Viscosity Solver for SPH Fluids"
 import taichi as ti
 import numpy as np
-from ..containers import BaseContainer
-from ..rigid_solver import RigidSolver
+from base import BaseContainer
+from rigid import RigidSolver
+from .kernel_functions import KernelFunctions
+from .rigid_particle_utils import RigidParticleUtils
+from .acceleration_utils import AccelerationUtils
+from .implicit_viscosity_solver import ImplicitViscositySolver
+from .density_utils import DensityUtils
+from .boundary_utils import BoundaryUtils
+from .rigid_particle_state import RigidParticleState
+from .fluid_particle_utils import FluidParticleUtils
+from .initialization_utils import InitializationUtils
+from .step_utils import StepUtils
 
 @ti.data_oriented
-class BaseSolver():
+class BaseSolver:
     def __init__(self, container: BaseContainer):
         self.container = container
         self.cfg = container.cfg
@@ -37,18 +47,16 @@ class BaseSolver():
 
         self.rigid_solver = RigidSolver(container, gravity=self.g,  dt=self.dt[None])
 
-        if self.viscosity_method == "implicit":
-            # initialize things needed for conjugate gradient solver
-            # conjugate gradient solver implemented following https://en.wikipedia.org/wiki/Conjugate_gradient_method
-            self.cg_p = ti.Vector.field(self.container.dim, dtype=ti.f32, shape=self.container.particle_max_num)
-            self.original_velocity = ti.Vector.field(self.container.dim, dtype=ti.f32, shape=self.container.particle_max_num)
-            self.cg_Ap = ti.Vector.field(self.container.dim, dtype=ti.f32, shape=self.container.particle_max_num)
-            self.cg_x = ti.Vector.field(self.container.dim, dtype=ti.f32, shape=self.container.particle_max_num)
-            self.cg_b = ti.Vector.field(self.container.dim, dtype=ti.f32, shape=self.container.particle_max_num)
-            self.cg_alpha = ti.field(dtype=ti.f32, shape=())
-            self.cg_beta = ti.field(dtype=ti.f32, shape=())
-            self.cg_r = ti.Vector.field(self.container.dim, dtype=ti.f32, shape=self.container.particle_max_num)
-            self.cg_error = ti.field(dtype=ti.f32, shape=())
-            self.cg_diagnol_ii_inv = ti.Matrix.field(self.container.dim, self.container.dim, dtype=ti.f32, shape=self.container.particle_max_num)
+        self.kernel_functions = KernelFunctions(container.dh, container.dim)
+        self.rigid_particle_utils = RigidParticleUtils(container, self.density_0, self.g_upper)
+        self.acceleration_utils = AccelerationUtils(container)
+        self.implicit_viscosity_solver = ImplicitViscositySolver(container)
+        self.density_utils = DensityUtils(container)
+        self.boundary_utils = BoundaryUtils(container)
+        self.rigid_particle_state = RigidParticleState(container)
+        self.fluid_particle_utils = FluidParticleUtils(container)
+        self.initialization_utils = InitializationUtils(container)
+        self.step_utils = StepUtils(container)
 
-            self.cg_tol = 1e-6
+    def step(self):
+        self.step_utils.step()

@@ -4,7 +4,7 @@ import numpy as np
 import trimesh as tm
 from tqdm import tqdm
 from functools import reduce
-from ..utils import SimConfig
+from utils import SimConfig
 @ti.data_oriented
 class BaseContainer:
     def __init__(self, config: SimConfig, GGUI=False):

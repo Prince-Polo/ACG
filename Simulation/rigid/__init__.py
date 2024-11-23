@@ -1,1 +1,1 @@
-from rigid_solver import RigidSolver
+from rigid import RigidSolver

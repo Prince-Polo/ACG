@@ -1,6 +1,6 @@
 import taichi as ti
 import numpy as np
-from ..containers import BaseContainer
+from containers import BaseContainer
 
 # this script is not used in the project
 @ti.data_oriented

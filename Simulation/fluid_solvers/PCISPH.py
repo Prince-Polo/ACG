@@ -2,7 +2,7 @@
 # fluid rigid interaction force implemented as paper "Versatile Rigid-Fluid Coupling for Incompressible SPH"
 import taichi as ti
 import numpy as np
-from ..containers import PCISPHContainer
+from containers import PCISPHContainer
 from .base_solver import BaseSolver
 
 @ti.data_oriented

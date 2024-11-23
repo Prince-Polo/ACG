@@ -1,7 +1,7 @@
 # implementation of paper "Weakly compressible SPH for free surface flows"
 # fluid rigid interaction force implemented as paper "Versatile Rigid-Fluid Coupling for Incompressible SPH"
 import taichi as ti
-from ..containers import WCSPHContainer
+from containers import WCSPHContainer
 from .base_solver import BaseSolver
 @ti.data_oriented
 class WCSPHSolver(BaseSolver):

@@ -2,7 +2,7 @@ import taichi as ti
 import numpy as np
 import trimesh as tm
 from functools import reduce
-from ..utils import SimConfig
+from utils import SimConfig
 from .base_container import BaseContainer
 
 @ti.data_oriented

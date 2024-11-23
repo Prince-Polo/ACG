@@ -3,8 +3,8 @@ import argparse
 import taichi as ti
 import numpy as np
 from utils import SimConfig
-from base import DFSPHContainer
-from fluid import DFSPHSolver
+from Simulation.base import DFSPHContainer
+from Simulation.fluid import DFSPHSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.8)
 

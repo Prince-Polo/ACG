@@ -2,8 +2,8 @@ import taichi as ti
 import numpy as np
 import os
 import math
-from ..containers import BaseContainer
-from ..utils import create_urdf
+from containers import BaseContainer
+from utils import create_urdf
 from typing import List, Tuple, Dict, Union
 
 class PyBulletSolver():
