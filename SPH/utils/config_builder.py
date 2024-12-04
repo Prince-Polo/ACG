@@ -1,4 +1,4 @@
-# copy from https://github.com/erizmr/SPH_Taichi/blob/master/config_builder.py
+# copied from https://github.com/erizmr/SPH_Taichi/blob/master/config_builder.py
 import json
 
 
