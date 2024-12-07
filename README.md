@@ -55,8 +55,6 @@ We change the name of the video and get `video_for_fluid_rigid_coupling2.mp4` in
 
 ## Declarations:
 
-### Direct References:
-
 Part of the `data/models` and `data/scenes` in this project uses the data from [jason-huang03/SPH_Project](https://github.com/jason-huang03/SPH_Project/tree/master).
 
 The `run_simulation.py` and `config_builder` in this project references the implementation from [erizmr/SPH_Taichi](https://github.com/erizmr/SPH_Taichi/tree/master).
@@ -64,3 +62,5 @@ The `run_simulation.py` and `config_builder` in this project references the impl
 The `surface_reconstruction.py` in this project uses [splashsurf](https://github.com/InteractiveComputerGraphics/splashsurf).
 
 The `make_video.py` and `boundary.py` in this project references the implementation from [jason-huang03/SPH_Project](https://github.com/jason-huang03/SPH_Project/tree/master).
+
+The whole structure idea was referencing the framework of [jason-huang03/SPH_Project](https://github.com/jason-huang03/SPH_Project/tree/master), and we implement the codes based on the paper or tutorial [Smoothed Particle Hydrodynamics: Techniques for the Physics Based Simulation of Fluids and Solids](https://sph-tutorial.physics-simulation.org/pdf/SPH_Tutorial.pdf). Later advanced implementation and functionalities will be learned based on the papers suggested in this tutorial.
