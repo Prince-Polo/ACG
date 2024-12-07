@@ -73,7 +73,7 @@ class BaseSolver():
                     self.container.particle_masses[p_i] = self.density_0 * self.container.particle_rest_volumes[p_i]
             else:
                 # For non-rigid particles, set the mass based on the density and rest volume
-                self.container.particle_masses[p_i] = self.density * self.container.particle_rest_volumes[p_i]
+                self.container.particle_masses[p_i] = self.container.particle_densities[p_i] * self.container.particle_rest_volumes[p_i]
 
     @ti.func
     def compute_rigid_particle_volume_task(self, p_i, p_j, volume: ti.template()):
