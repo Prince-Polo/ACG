@@ -3,6 +3,7 @@ import numpy as np
 import math
 from typing import Tuple
 from ..containers import BaseContainer
+from .boundary import Boundary
 
 @ti.data_oriented
 class RigidSolver():
@@ -18,6 +19,7 @@ class RigidSolver():
         self.rigid_blocks = self.cfg.get_rigid_blocks()
         num_rigid_bodies = len(self.rigid_bodies) + len(self.rigid_blocks)
         self.dt = dt
+        self.boundary = Boundary(self.container)
 
     def insert_rigid_object(self):
         for rigid_body in self.rigid_bodies:
@@ -25,14 +27,6 @@ class RigidSolver():
 
         for rigid_block in self.rigid_blocks:
             self.init_rigid_block(rigid_block)
-
-    def create_boundary(self, thickness: float = 0.01):
-        eps = self.container.diameter + self.container.boundary_thickness 
-        domain_start = self.container.domain_start
-        domain_end = self.container.domain_end
-
-        self.start = np.array(domain_start) + eps
-        self.end = np.array(domain_end) - eps
 
     def init_rigid_body(self, rigid_body):
         index = rigid_body["objectId"]
@@ -42,12 +36,6 @@ class RigidSolver():
             return
         if rigid_body["entryTime"] > self.total_time:
             return
-
-        is_dynamic = rigid_body["isDynamic"]
-        if is_dynamic:
-            velocity = np.array(rigid_body["velocity"], dtype=np.float32)
-        else:
-            velocity = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
         is_dynamic = rigid_body["isDynamic"]
         if not is_dynamic:
@@ -95,7 +83,6 @@ class RigidSolver():
             rotation_matrix = np.eye(3) + np.sin(theta) * omega_cross + (1 - np.cos(theta)) * np.dot(omega_cross, omega_cross)
 
             self.container.rigid_body_rotations[index] = np.dot(rotation_matrix, self.container.rigid_body_rotations[index])
-        
 
     def step(self):
         print(self.container.object_num[None])
@@ -109,7 +96,6 @@ class RigidSolver():
 
 
     def get_rigid_body_states(self, index):
-        # ! here we use the information of base frame. We assume the center of mass is exactly the base position.
         linear_velocity = self.container.rigid_body_velocities[index]
         angular_velocity = self.container.rigid_body_angular_velocities[index]
         position = self.container.rigid_body_com[index]

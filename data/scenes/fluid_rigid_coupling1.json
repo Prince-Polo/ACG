@@ -16,8 +16,8 @@
 		"viscosity_b": 5.0,
 		"boundaryHandlingMethod": 0,
 		"exportFrame": true,
-		"exportPly": true,
-		"exportObj": true
+		"exportPly": false,
+		"exportObj": false
 	},
 	"RigidBodies": [
 		{
@@ -30,7 +30,7 @@
 			"velocity": [0.0, 0.0, 0.0],
 			"density": 2200.0,
 			"color": [255, 255, 255], 
-			"isDynamic": true,
+			"isDynamic": false,
 			"entryTime": -1.0
 		},
 		{
@@ -43,7 +43,7 @@
 			"velocity": [0.0, 0.0, 0.0],
 			"density": 2500.0,
 			"color": [255, 255, 255], 
-			"isDynamic": true,
+			"isDynamic": false,
 			"entryTime": -1.0
 		}
 	],

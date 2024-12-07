@@ -2,7 +2,7 @@ import bpy
 import os
 
 # 渲染输出文件夹
-output_path = "E:/Documents/Homework/graphics/ACG/output_frames2"
+output_path = "E:/Documents/Homework/graphics/ACG/output_frames"
 os.makedirs(output_path, exist_ok=True)
 
 # 设置场景
@@ -56,7 +56,7 @@ scene.render.resolution_x = 1920
 scene.render.resolution_y = 1080
 
 # 输入文件夹路径（每帧对应的 .obj 文件）
-input_dir = "fluid_rigid_coupling1_output0"
+input_dir = "fluid_rigid_coupling1_output"
 frames = sorted(os.listdir(input_dir))
 
 # 检查当前使用的渲染设备
