@@ -71,9 +71,6 @@ class BaseSolver():
                     # Compute the rest volume and mass of the particle
                     self.container.particle_rest_volumes[p_i] = 1.0 / volume
                     self.container.particle_masses[p_i] = self.density_0 * self.container.particle_rest_volumes[p_i]
-            else:
-                # For non-rigid particles, set the mass based on the density and rest volume
-                self.container.particle_masses[p_i] = self.container.particle_densities[p_i] * self.container.particle_rest_volumes[p_i]
 
     @ti.func
     def compute_rigid_particle_volume_task(self, p_i, p_j, volume: ti.template()):
@@ -133,14 +130,14 @@ class BaseSolver():
 
         elif self.container.particle_materials[p_j] == self.container.material_rigid:
             # Update the acceleration with the pressure contribution from particle j
-            acceleration += -self.density_0 * self.container.particle_rest_volumes[p_j] * (
+            acceleration += -self.container.particle_masses[p_j] * (
                 self.container.particle_pressures[p_i] / (self.container.particle_densities[p_i] ** 2)) * nabla_ij
 
             if self.container.particle_is_dynamic[p_j]:
                 # If the rigid particle is dynamic, compute the force and torque
                 object_j = self.container.particle_object_ids[p_j]
-                force_j = self.density_0 * self.container.particle_rest_volumes[p_j] * (
-                    self.container.particle_pressures[p_i] / (self.container.particle_densities[p_i] ** 2)) * nabla_ij * self.density_0 * self.container.particle_rest_volumes[p_i]
+                force_j = self.container.particle_masses[p_j] * (
+                    self.container.particle_pressures[p_i] / (self.container.particle_densities[p_i] ** 2)) * nabla_ij * self.container.particle_masses[p_i]
                 torque_j = ti.math.cross(pos_i - self.container.rigid_body_com[object_j], force_j)
                 # Update the force and torque of the rigid body
                 self.container.rigid_body_forces[object_j] += force_j
@@ -203,7 +200,7 @@ class BaseSolver():
                 # Iterate over all neighbors to compute the viscosity acceleration
                 self.container.for_all_neighbors(p_i, self.compute_viscosity_acceleration_task, a_i)
                 # Add computed acceleration to the particle's acceleration
-                self.container.particle_accelerations[p_i] += (a_i / self.density_0)
+                self.container.particle_accelerations[p_i] += (a_i / self.container.particle_rest_densities[p_i])
 
     @ti.func
     def compute_viscosity_acceleration_task(self, p_i, p_j, a_i: ti.template()):
@@ -256,7 +253,7 @@ class BaseSolver():
                 # Iterate over all neighbors to compute the density
                 self.container.for_all_neighbors(p_i, self.compute_density_task, density)
                 # Scale the density by the reference density
-                self.container.particle_densities[p_i] = density * self.density_0
+                self.container.particle_densities[p_i] = density 
 
     @ti.func
     def compute_density_task(self, p_i, p_j, density: ti.template()):
@@ -268,7 +265,7 @@ class BaseSolver():
         pos_j = self.container.particle_positions[p_j]
         R_mod = (pos_i - pos_j).norm()
         # Accumulate the density contribution from particle j
-        density += self.container.particle_rest_volumes[p_j] * self.kernel.weight(R_mod, self.container.dh)
+        density += self.container.particle_masses[p_j] * self.kernel.weight(R_mod, self.container.dh)
 
     @ti.kernel
     def _renew_rigid_particle_state(self):
