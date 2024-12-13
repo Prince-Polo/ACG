@@ -8,7 +8,6 @@ from SPH.fluid_solvers import DFSPHSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.8)
 
-#! due to code legacy, please use domain_start = [0, 0, 0]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--scene_file',
