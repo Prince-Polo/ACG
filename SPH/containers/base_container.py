@@ -82,8 +82,10 @@ class BaseContainer:
         self.particle_velocities = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.particle_accelerations = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.particle_rest_volumes = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_rest_densities = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_masses = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_densities = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_num_densities = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_pressures = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_materials = ti.field(dtype=int, shape=self.particle_max_num)
         self.particle_colors = ti.Vector.field(3, dtype=int, shape=self.particle_max_num)
@@ -117,8 +119,10 @@ class BaseContainer:
         self.rigid_particle_original_positions_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.particle_velocities_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.particle_rest_volumes_buffer = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_rest_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_masses_buffer = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
+        self.particle_num_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_materials_buffer = ti.field(dtype=int, shape=self.particle_max_num)
         self.particle_colors_buffer = ti.Vector.field(3, dtype=int, shape=self.particle_max_num)
         self.is_dynamic_buffer = ti.field(dtype=int, shape=self.particle_max_num)
@@ -294,7 +298,7 @@ class BaseContainer:
         sum_mass = 0.0
         for i in range(self.particle_num[None]):
             if self.particle_object_ids[i] == objId and self.particle_is_dynamic[i]:
-                sum_mass += self.particle_densities[i] * self.V0
+                sum_mass += self.particle_rest_densities[i] * self.V0
         return sum_mass
     
     @ti.kernel
@@ -302,7 +306,7 @@ class BaseContainer:
         sum_com = ti.Vector([0.0 for _ in range(self.dim)])
         for i in range(self.particle_num[None]):
             if self.particle_object_ids[i] == objId and self.particle_is_dynamic[i]:
-                sum_com += self.particle_positions[i] * self.particle_densities[i] * self.V0
+                sum_com += self.particle_positions[i] * self.particle_rest_densities[i] * self.V0
 
         return sum_com / self.rigid_body_masses[objId]
             
@@ -313,7 +317,9 @@ class BaseContainer:
         self.rigid_particle_original_positions[p] = x
         self.particle_velocities[p] = v
         self.particle_densities[p] = density
+        self.particle_num_densities[p] = density
         self.particle_rest_volumes[p] = self.V0
+        self.particle_rest_densities[p] = density
         self.particle_masses[p] = self.V0 * density
         self.particle_pressures[p] = pressure
         self.particle_materials[p] = material
@@ -497,9 +503,11 @@ class BaseContainer:
             self.particle_positions_buffer[new_index] = self.particle_positions[i]
             self.particle_velocities_buffer[new_index] = self.particle_velocities[i]
             self.particle_rest_volumes_buffer[new_index] = self.particle_rest_volumes[i]
+            self.particle_rest_densities_buffer[new_index] = self.particle_rest_densities[i]
             self.particle_masses_buffer[new_index] = self.particle_masses[i]
             self.particle_densities_buffer[new_index] = self.particle_densities[i]
             self.particle_materials_buffer[new_index] = self.particle_materials[i]
+            self.particle_num_densities_buffer[new_index] = self.particle_num_densities[i]
             self.particle_colors_buffer[new_index] = self.particle_colors[i]
             self.is_dynamic_buffer[new_index] = self.particle_is_dynamic[i]
             
@@ -510,8 +518,10 @@ class BaseContainer:
             self.particle_positions[i] = self.particle_positions_buffer[i]
             self.particle_velocities[i] = self.particle_velocities_buffer[i]
             self.particle_rest_volumes[i] = self.particle_rest_volumes_buffer[i]
+            self.particle_rest_densities[i] = self.particle_rest_densities_buffer[i]
             self.particle_masses[i] = self.particle_masses_buffer[i]
             self.particle_densities[i] = self.particle_densities_buffer[i]
+            self.particle_num_densities[i] = self.particle_num_densities_buffer[i]
             self.particle_materials[i] = self.particle_materials_buffer[i]
             self.particle_colors[i] = self.particle_colors_buffer[i]
             self.particle_is_dynamic[i] = self.is_dynamic_buffer[i]

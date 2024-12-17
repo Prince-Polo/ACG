@@ -3,11 +3,12 @@ import argparse
 import taichi as ti
 import numpy as np
 from SPH.utils import SimConfig
-from SPH.containers import DFSPHContainer
-from SPH.fluid_solvers import DFSPHSolver
+from SPH.containers import DFSPHContainer, IISPHContainer
+from SPH.fluid_solvers import DFSPHSolver, IISPHSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.8)
 
+#! due to code legacy, please use domain_start = [0, 0, 0]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--scene_file',
@@ -46,6 +47,9 @@ if __name__ == "__main__":
     if simulation_method == "dfsph":
         container = DFSPHContainer(config, GGUI=True)
         solver = DFSPHSolver(container)
+    elif simulation_method == "iisph":
+        container = IISPHContainer(config, GGUI=True)
+        solver = IISPHSolver(container)
     else:
         raise NotImplementedError(f"Simulation method {simulation_method} not implemented")
 
