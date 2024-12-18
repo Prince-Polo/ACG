@@ -4,8 +4,6 @@ from . import ObjectProcessor as op
 from functools import reduce
 from ..utils import SimConfig
 
-GRAVITY = ti.Vector([0.0, -9.81, 0.0])
-
 @ti.data_oriented
 class BaseContainer:
     def __init__(self, config: SimConfig, GGUI = False):
@@ -14,7 +12,7 @@ class BaseContainer:
         self.cfg = config
         self.total_time = 0
 
-        self.gravity = GRAVITY
+        self.gravity = ti.Vector([0.0, -9.81, 0.0])
         self.domain_start = np.array([0.0, 0.0, 0.0])
         self.domain_start = np.array(self.cfg.get_cfg("domainStart"))
         self.domain_end = np.array([1.0, 1.0, 1.0])
@@ -85,7 +83,6 @@ class BaseContainer:
         self.particle_rest_densities = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_masses = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_densities = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_num_densities = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_pressures = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_materials = ti.field(dtype=int, shape=self.particle_max_num)
         self.particle_colors = ti.Vector.field(3, dtype=int, shape=self.particle_max_num)
@@ -122,7 +119,6 @@ class BaseContainer:
         self.particle_rest_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_masses_buffer = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_num_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_materials_buffer = ti.field(dtype=int, shape=self.particle_max_num)
         self.particle_colors_buffer = ti.Vector.field(3, dtype=int, shape=self.particle_max_num)
         self.is_dynamic_buffer = ti.field(dtype=int, shape=self.particle_max_num)
@@ -317,7 +313,6 @@ class BaseContainer:
         self.rigid_particle_original_positions[p] = x
         self.particle_velocities[p] = v
         self.particle_densities[p] = density
-        self.particle_num_densities[p] = density
         self.particle_rest_volumes[p] = self.V0
         self.particle_rest_densities[p] = density
         self.particle_masses[p] = self.V0 * density
@@ -507,7 +502,6 @@ class BaseContainer:
             self.particle_masses_buffer[new_index] = self.particle_masses[i]
             self.particle_densities_buffer[new_index] = self.particle_densities[i]
             self.particle_materials_buffer[new_index] = self.particle_materials[i]
-            self.particle_num_densities_buffer[new_index] = self.particle_num_densities[i]
             self.particle_colors_buffer[new_index] = self.particle_colors[i]
             self.is_dynamic_buffer[new_index] = self.particle_is_dynamic[i]
             
@@ -521,7 +515,6 @@ class BaseContainer:
             self.particle_rest_densities[i] = self.particle_rest_densities_buffer[i]
             self.particle_masses[i] = self.particle_masses_buffer[i]
             self.particle_densities[i] = self.particle_densities_buffer[i]
-            self.particle_num_densities[i] = self.particle_num_densities_buffer[i]
             self.particle_materials[i] = self.particle_materials_buffer[i]
             self.particle_colors[i] = self.particle_colors_buffer[i]
             self.particle_is_dynamic[i] = self.is_dynamic_buffer[i]

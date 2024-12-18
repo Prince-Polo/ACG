@@ -249,18 +249,17 @@ class BaseSolver():
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_fluid:
                 # Initialize density with the self-contribution
-                density = self.container.particle_rest_volumes[p_i] * self.kernel.weight(0.0, self.container.dh)
+                density = self.container.particle_masses[p_i] * self.kernel.weight(0.0, self.container.dh)
                 # Iterate over all neighbors to compute the density
                 self.container.for_all_neighbors(p_i, self.compute_density_task, density)
                 # Scale the density by the reference density
-                self.container.particle_densities[p_i] = density 
+                self.container.particle_densities[p_i] = density
 
     @ti.func
     def compute_density_task(self, p_i, p_j, density: ti.template()):
         """
         Compute the density contribution from neighboring particles.
         """
-        # Fluid neighbors and rigid neighbors are treated the same
         pos_i = self.container.particle_positions[p_i]
         pos_j = self.container.particle_positions[p_j]
         R_mod = (pos_i - pos_j).norm()
@@ -288,8 +287,6 @@ class BaseSolver():
         Renew the state of rigid particles and update the mesh if necessary.
         """
         self._renew_rigid_particle_state()
-
-        self.container.object_num[None] = self.container.fluid_object_num[None] + self.container.rigid_object_num[None] + (1 if self.container.add_boundary else 0)
     
         if self.cfg.get_cfg("exportObj"):
             for obj_i in range(self.container.object_num[None]):
@@ -352,7 +349,9 @@ class BaseSolver():
         print("computing volume")
         self.compute_rigid_particle_volume()
         print("preparing finished")
-
+        self.container.object_num[None] = self.container.fluid_object_num[None] + self.container.rigid_object_num[None] + (1 if self.container.add_boundary else 0)
+        print(f"Total object num: {self.container.object_num[None]}")
+    
     def step(self):
         self._step()
         self.container.total_time += self.dt[None]
