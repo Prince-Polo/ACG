@@ -11,11 +11,11 @@
 		"gravitation": [0.0, -9.81, 0.0],
 		"simulationMethod": "iisph",
 		"viscosityMethod": "standard",
-		"timeStepSize": 0.001,
+		"timeStepSize": 0.2,
 		"viscosity": 10.0,
 		"viscosity_b": 5.0,
 		"boundaryHandlingMethod": 0,
-		"exportFrame": true,
+		"exportFrame": false,
 		"exportPly": false,
 		"exportObj": false
 	},
