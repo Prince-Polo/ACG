@@ -4,7 +4,7 @@ import taichi as ti
 import numpy as np
 from SPH.utils import SimConfig
 from SPH.containers import DFSPHContainer, IISPHContainer
-from SPH.fluid_solvers import DFSPHSolver, IISPHSolver
+from SPH.fluid_solvers import DFSPHSolver, IISPHSolver, DFSPH_LSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.8)
 
@@ -50,6 +50,9 @@ if __name__ == "__main__":
     elif simulation_method == "iisph":
         container = IISPHContainer(config, GGUI=True)
         solver = IISPHSolver(container)
+    elif simulation_method == "dfsph_L":
+        container = DFSPHContainer(config, GGUI=True)
+        solver = DFSPH_LSolver(container, L=True)
     else:
         raise NotImplementedError(f"Simulation method {simulation_method} not implemented")
 

@@ -9,7 +9,7 @@
 		"totalTime": 8.0,
 		"density0": 1000, 
 		"gravitation": [0.0, -9.81, 0.0],
-		"simulationMethod": "iisph",
+		"simulationMethod": "dfsph_L",
 		"viscosityMethod": "standard",
 		"timeStepSize": 0.001,
 		"viscosity": 10.0,
