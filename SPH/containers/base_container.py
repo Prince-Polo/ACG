@@ -92,6 +92,7 @@ class BaseContainer:
         self.rigid_particle_original_positions = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         
         self.object_materials = ti.field(dtype=int, shape=self.max_object_num)
+        self.object_densities = ti.field(dtype=float, shape=self.max_object_num)
         self.object_num = ti.field(dtype=int, shape=())
         self.fluid_object_num = ti.field(dtype=int, shape=())
         self.rigid_object_num = ti.field(dtype=int, shape=())
@@ -150,6 +151,7 @@ class BaseContainer:
             
             self.object_visibility[self.object_num[None]-1] = 0
             self.object_materials[self.object_num[None]-1] = self.material_rigid
+            self.object_densities[self.object_num[None]-1] = 1000.0
             self.rigid_body_is_dynamic[self.object_num[None]-1] = 0
             self.rigid_body_velocities[self.object_num[None]-1] = ti.Vector([0.0 for _ in range(self.dim)])
             self.object_collection[self.object_num[None]-1] = 0
@@ -180,6 +182,7 @@ class BaseContainer:
                 self.object_visibility[obj_id] = 1
                 
             self.object_materials[obj_id] = self.material_fluid
+            self.object_densities[obj_id] = density
             self.object_collection[obj_id] = fluid
             
             self.add_cube(
@@ -220,6 +223,7 @@ class BaseContainer:
             
             self.object_id_fluid_body.add(obj_id)
             self.object_materials[obj_id] = self.material_fluid
+            self.object_densities[obj_id] = density
             self.object_collection[obj_id] = fluid
             
             self.add_particles(
@@ -250,6 +254,7 @@ class BaseContainer:
             particle_num = rigid["particleNum"]
             voxelized_points_np = rigid["voxelizedPoints"]
             
+            velocity = np.array(fluid["velocity"], dtype=np.float32)
             density = rigid["density"]
             color = np.array(rigid["color"], dtype=np.int32)
             is_dynamic = rigid["isDynamic"]
@@ -260,6 +265,7 @@ class BaseContainer:
                 self.object_visibility[obj_id] = 1
             
             self.object_materials[obj_id] = self.material_rigid
+            self.object_densities[obj_id] = density
             self.object_collection[obj_id] = rigid
             
             self.add_particles(
