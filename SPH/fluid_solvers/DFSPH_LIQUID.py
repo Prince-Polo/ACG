@@ -137,11 +137,9 @@ class DFSPH_LSolver(BaseSolver):
             all_errors = self.compute_density_derivative_error() 
 
             all_pass = True
-            fluid_num = self.container.fluid_object_num[None]
             for i, e in enumerate(all_errors):
                 oid = self.fluid_object_list[i]
                 fluid_density = self.container.object_densities[oid]
-                # eta = self.max_error_V * fluid_density / self.dt[None]
                 if e > (self.max_error_V * fluid_density / self.dt[None]):
                     all_pass = False
                     break
@@ -325,7 +323,6 @@ class DFSPH_LSolver(BaseSolver):
         self.container.insert_object()
         self.rigid_solver.insert_rigid_object()
         self.renew_rigid_particle_state()
-
         
         self.boundary.enforce_domain_boundary(self.container.material_fluid)
 

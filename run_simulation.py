@@ -3,8 +3,8 @@ import argparse
 import taichi as ti
 import numpy as np
 from SPH.utils import SimConfig
-from SPH.containers import DFSPHContainer, IISPHContainer
-from SPH.fluid_solvers import DFSPHSolver, IISPHSolver, DFSPH_LSolver
+from SPH.containers import DFSPHContainer, IISPHContainer, BaseContainer
+from SPH.fluid_solvers import DFSPHSolver, IISPHSolver, DFSPH_LSolver, WCSPHSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.8)
 
@@ -52,7 +52,10 @@ if __name__ == "__main__":
         solver = IISPHSolver(container)
     elif simulation_method == "dfsph_L":
         container = DFSPHContainer(config, GGUI=True)
-        solver = DFSPH_LSolver(container, L=True)
+        solver = DFSPH_LSolver(container)
+    elif simulation_method == "wcsph":
+        container = BaseContainer(config, GGUI=True)
+        solver = WCSPHSolver(container)
     else:
         raise NotImplementedError(f"Simulation method {simulation_method} not implemented")
 
