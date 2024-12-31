@@ -9,13 +9,13 @@
 		"totalTime": 8.0,
 		"density0": 1000, 
 		"gravitation": [0.0, -9.81, 0.0],
-		"simulationMethod": "iisph",
+		"simulationMethod": "dfsph_L",
 		"viscosityMethod": "standard",
-		"timeStepSize": 0.2,
+		"timeStepSize": 0.001,
 		"viscosity": 10.0,
 		"viscosity_b": 5.0,
 		"boundaryHandlingMethod": 0,
-		"exportFrame": false,
+		"exportFrame": true,
 		"exportPly": false,
 		"exportObj": false
 	},
@@ -29,7 +29,7 @@
 			"translation": [0.2, 0.0, 0.2],
 			"scale": [1, 1, 1],
 			"velocity": [0.0, -1.0, 0.0],
-			"density": 1000.0,
+			"density": 1400.0,
 			"color": [50, 100, 200],
 			"entryTime": -1.0
 		}

@@ -1,0 +1,64 @@
+{
+	"Configuration": 
+	{
+        "domainStart": [0.0, 0.0, 0.0],
+        "domainEnd": [3.0, 4.0, 1.8],
+		"addDomainBox": true,
+		"particleRadius": 0.01,
+		"fps": 60.0,
+		"totalTime": 6.0,
+		"density0": 1000, 
+		"gravitation": [0.0, -9.81, 0.0],
+		"simulationMethod": "dfsph",
+		"viscosityMethod": "standard",
+		"timeStepSize":  0.001,
+		"viscosity": 10.0,
+		"viscosity_b": 0.3,
+		"boundaryHandlingMethod": 0,
+		"exportFrame": true,
+		"exportPly": true,
+		"exportObj": true
+	},
+	"RigidBodies": [
+		{
+            "objectId": 0,
+			"geometryFile": "./data/models/rotatedBridge.obj",
+			"translation": [1.3, 0.26, 1.1],
+			"rotationAxis": [1, 0, 0],
+			"rotationAngle": 0,
+			"scale": [0.12, 0.2, 0.095],
+			"velocity": [0.0, 0.0, 0.0],
+			"density": 2200.0,
+			"color": [255, 255, 255], 
+			"isDynamic": false,
+			"entryTime": -1.0
+		},
+        {
+            "objectId": 1,
+			"geometryFile": "./data/models/bunny.obj",
+			"translation": [2.5, 1.2, 0.9],
+			"rotationAxis": [0, 1, 0],
+			"rotationAngle": 0,
+			"scale": [0.5, 0.5, 0.5],
+			"velocity": [0.0, -0.5, 0.0],
+			"density": 500.0,
+			"color": [255, 255, 255], 
+			"isDynamic": true,
+			"entryTime": 3.0
+		}
+	],
+
+	"FluidBlocks": [
+		{
+            "objectId": 2,
+			"start": [0.18, 0.2, 0.3],
+			"end": [0.72, 3.8, 1.5],
+			"translation": [0.2, 0.0, 0.2],
+			"scale": [1, 1, 1],
+			"velocity": [0.0, -1.0, 0.0],
+			"density": 1000.0,
+			"color": [50, 100, 200],
+			"entryTime": -1.0
+		}
+	]
+}
