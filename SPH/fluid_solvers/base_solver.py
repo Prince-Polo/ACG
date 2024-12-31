@@ -272,7 +272,7 @@ class BaseSolver():
         Update rigid particle state from rigid body state updated by the rigid solver.
         """
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_rigid and self.container.particle_is_dynamic[p_i]:
+            if self.container.particle_materials[p_i] == self.container.material_rigid:
                 object_id = self.container.particle_object_ids[p_i]
                 if self.container.rigid_body_is_dynamic[object_id]:
                     # Calculate the rotated position

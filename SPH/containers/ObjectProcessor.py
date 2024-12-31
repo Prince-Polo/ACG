@@ -4,128 +4,110 @@ from tqdm import tqdm
 from functools import reduce
 from ..utils import SimConfig
 
-PI = 3.1415926
-
-def fluid_body_processor(dim, config: SimConfig, diameter):
-    fluid_bodies = config.get_fluid_bodies()
-    fluid_body_num = 0
-    for fluid_body in fluid_bodies:
-        voxelized_points_np = load_fluid_body(dim, fluid_body, pitch=diameter)
-        fluid_body["particleNum"] = voxelized_points_np.shape[0]
-        fluid_body["voxelizedPoints"] = voxelized_points_np
-        fluid_body_num += voxelized_points_np.shape[0]
-    return fluid_body_num
-
-
-def load_fluid_body(dim, rigid_body, pitch):
-        mesh = tm.load(rigid_body["geometryFile"])
-        mesh.apply_scale(rigid_body["scale"])
-        offset = np.array(rigid_body["translation"])
-
-        angle = rigid_body["rotationAngle"] / 360 * 2 * PI
-        direction = rigid_body["rotationAxis"]
-        rot_matrix = tm.transformations.rotation_matrix(angle, direction, mesh.vertices.mean(axis=0))
+def process_mesh(mesh, transform_params):
+    """统一的网格变换处理"""
+    if transform_params:
+        offset = np.array(transform_params["translation"])
+        angle = transform_params["rotationAngle"] / 360 * 2 * np.pi
+        direction = transform_params["rotationAxis"]
+        center = mesh.vertices.mean(axis=0)
+        rot_matrix = tm.transformations.rotation_matrix(angle, direction, center)
         mesh.apply_transform(rot_matrix)
         mesh.vertices += offset
+    return mesh
 
-        min_point, max_point = mesh.bounding_box.bounds
-        num_dim = []
-        for i in range(dim):
-            num_dim.append(
-                np.arange(min_point[i], max_point[i], pitch))
-        
-        new_positions = np.array(np.meshgrid(*num_dim,
-                                             sparse=False,
-                                             indexing='ij'),
-                                 dtype=np.float32)
-        new_positions = new_positions.reshape(-1,
-                                              reduce(lambda x, y: x * y, list(new_positions.shape[1:]))).transpose()
-        
-        print(f"processing {len(new_positions)} points to decide whether they are inside the mesh. This might take a while.")
-        inside = [False for _ in range(len(new_positions))]
+def create_grid_points(dim, bounds, spacing):
+    """统一的网格点生成"""
+    min_point, max_point = bounds
+    grid_ranges = [np.arange(min_point[i], max_point[i], spacing) for i in range(dim)]
+    return np.array(np.meshgrid(*grid_ranges, indexing='ij')).reshape(dim, -1).T
 
-        # decide whether the points are inside the mesh or not
-        # TODO: make it parallel or precompute and store
-        pbar = tqdm(total=len(new_positions))
-        for i in range(len(new_positions)):
-            if mesh.contains([new_positions[i]])[0]:
-                inside[i] = True
+def fluid_body_processor(dim, config: SimConfig, diameter):
+    """流体物体处理"""
+    total_particles = 0
+    for fluid_body in config.get_fluid_bodies():
+        points = load_fluid_body(dim, fluid_body, diameter)
+        fluid_body.update({
+            "particleNum": len(points),
+            "voxelizedPoints": points
+        })
+        total_particles += len(points)
+    return total_particles
+
+def load_fluid_body(dim, body_config, pitch):
+    """流体物体加载"""
+    mesh = tm.load(body_config["geometryFile"])
+    mesh.apply_scale(body_config["scale"])
+    mesh = process_mesh(mesh, body_config)
+    
+    points = create_grid_points(dim, mesh.bounding_box.bounds, pitch)
+    print(f"处理 {len(points)} 个点...")
+    return points[filter_points_inside_mesh(points, mesh)]
+
+def filter_points_inside_mesh(points, mesh):
+    """网格内部点过滤"""
+    inside = [False] * len(points)
+    with tqdm(total=len(points)) as pbar:
+        for i, point in enumerate(points):
+            inside[i] = mesh.contains([point])[0]
             pbar.update(1)
+    return inside
 
-        pbar.close()
+def rigid_body_processor(config: SimConfig, diameter):
+    """刚体处理"""
+    total_particles = 0
+    for rigid_body in config.get_rigid_bodies():
+        points = load_rigid_body(rigid_body, diameter)
+        rigid_body.update({
+            "particleNum": len(points),
+            "voxelizedPoints": points
+        })
+        total_particles += len(points)
+    return total_particles
 
-        new_positions = new_positions[inside]
-        return new_positions
+def load_rigid_body(body_config, pitch):
+    """刚体加载"""
+    mesh = tm.load(body_config["geometryFile"])
+    mesh.apply_scale(body_config["scale"])
+    
+    # 只处理静态物体的变换
+    if not body_config["isDynamic"]:
+        mesh = process_mesh(mesh, body_config)
+    
+    # 保存原始网格
+    body_config.update({
+        "mesh": mesh.copy(),
+        "restPosition": mesh.vertices,
+        "restCenterOfMass": np.zeros(3)
+    })
 
-def rigid_body_processor(config: SimConfig,diameter):
-    rigid_bodies = config.get_rigid_bodies()
-    rigid_body_num = 0
-    for rigid_body in rigid_bodies:
-        voxelized_points_np = load_rigid_body(rigid_body, pitch=diameter)
-        rigid_body["particleNum"] = voxelized_points_np.shape[0]
-        rigid_body["voxelizedPoints"] = voxelized_points_np
-        rigid_body_num += voxelized_points_np.shape[0]
-    return rigid_body_num
+    points = mesh.voxelized(pitch=pitch).fill().points
+    print(f"刚体 {body_config['objectId']} 粒子数: {len(points)}")
+    return points
 
-def load_rigid_body(rigid_body, pitch):
-        obj_id = rigid_body["objectId"]
-        mesh = tm.load(rigid_body["geometryFile"])
-        mesh.apply_scale(rigid_body["scale"])
+def fluid_block_processor(dim, config: SimConfig, diameter):
+    """流体块处理"""
+    total_particles = 0
+    for fluid in config.get_fluid_blocks():
+        num = compute_particle_num(dim, fluid["start"], fluid["end"], diameter)
+        fluid["particleNum"] = num
+        total_particles += num
+    return total_particles
 
-        if rigid_body["isDynamic"] == False:
-            offset = np.array(rigid_body["translation"])
-            angle = rigid_body["rotationAngle"] / 360 * 2 * PI
-            direction = rigid_body["rotationAxis"]
-            rot_matrix = tm.transformations.rotation_matrix(angle, direction, mesh.vertices.mean(axis=0))
-            mesh.apply_transform(rot_matrix)
-            mesh.vertices += offset
-        
-        # Backup the original mesh for exporting obj
-        mesh_backup = mesh.copy()
-        rigid_body["mesh"] = mesh_backup
-        rigid_body["restPosition"] = mesh_backup.vertices
-        rigid_body["restCenterOfMass"] = np.array([0.0, 0.0, 0.0]) 
-
-        voxelized_mesh = mesh.voxelized(pitch=pitch)
-        voxelized_mesh = mesh.voxelized(pitch=pitch).fill()
-        voxelized_points_np = voxelized_mesh.points
-        print(f"rigid body {obj_id} num: {voxelized_points_np.shape[0]}")
-        
-        return voxelized_points_np
-
-def fluid_block_processor(dim, config: SimConfig,diameter):
-    fluid_blocks = config.get_fluid_blocks()
-    fluid_block_num = 0
-    for fluid in fluid_blocks:
-        particle_num = compute_cube_particle_num(dim, fluid["start"], fluid["end"], space=diameter)
-        fluid["particleNum"] = particle_num
-        fluid_block_num += particle_num
-    return fluid_block_num
-
-def compute_cube_particle_num(dim, domain_start, domain_end, space):
-        num_dim = []
-        for i in range(dim):
-            num_dim.append(
-                np.arange(domain_start[i], domain_end[i], space))
-        return reduce(lambda x, y: x * y,
-                                   [len(n) for n in num_dim])
+def compute_particle_num(dim, start, end, spacing):
+    """计算区域内粒子数"""
+    return reduce(lambda x, y: x * y, 
+                 [len(np.arange(start[i], end[i], spacing)) for i in range(dim)])
 
 def compute_box_particle_num(dim, domain_start, domain_end, diameter, thickness):
-        num_dim = []
-        for i in range(dim):
-            num_dim.append(
-                np.arange(domain_start[i], domain_end[i], diameter))
-        
-        new_positions = np.array(np.meshgrid(*num_dim,
-                                             sparse=False,
-                                             indexing='ij'),
-                                 dtype=np.float32)
-        new_positions = new_positions.reshape(-1,
-                                              reduce(lambda x, y: x * y, list(new_positions.shape[1:]))).transpose()
-        
-        mask = np.zeros(new_positions.shape[0], dtype=bool)
-        for i in range(dim):
-            mask = mask | ((new_positions[:, i] <= domain_start[i] + thickness) | (new_positions[:, i] >= domain_end[i] - thickness))
-        new_positions = new_positions[mask]
-        return new_positions.shape[0]
+    """计算边界盒粒子数"""
+    points = create_grid_points(dim, (domain_start, domain_end), diameter)
+    
+    # 边界条件合并
+    mask = np.zeros(len(points), dtype=bool)
+    for i in range(dim):
+        mask |= ((points[:, i] <= domain_start[i] + thickness) | 
+                (points[:, i] >= domain_end[i] - thickness))
+    
+    return np.sum(mask)
         

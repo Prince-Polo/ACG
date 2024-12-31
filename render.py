@@ -89,18 +89,18 @@ for frame_idx, frame_dir in enumerate(frames):
         obj_path = os.path.join(frame_path, obj_file)
         bpy.ops.wm.obj_import(filepath=obj_path)
 
-        # 查找导入的对象，并设置材质
-        for obj in scene.objects:
-            if obj.type == 'MESH':
-                if obj_idx == 0:
-                    # 为第一个对象设置特定材质
-                    obj.data.materials.append(bpy.data.materials["AR3DMat Procedural Realistic Mirror"])
-                elif obj_idx == 1:
-                    # 为第二个对象设置特定材质
-                    obj.data.materials.append(bpy.data.materials["AR3DMat Procedural Realistic Mirror"])
-                elif obj_idx == 2:
-                    # 为第三个对象设置水材质
-                    obj.data.materials.append(bpy.data.materials["Water"])
+    # 查找导入的对象，并设置材质
+    for obj in scene.objects:
+        if obj.type == 'MESH':
+            if obj_idx == 0:
+                # 为第一个对象设置特定材质
+                obj.data.materials.append(bpy.data.materials["AR3DMat Procedural Realistic Mirror"])
+            elif obj_idx == 1:
+                # 为第二个对象设置特定材质
+                obj.data.materials.append(bpy.data.materials["AR3DMat Procedural Realistic Mirror"])
+            elif obj_idx == 2:
+                # 为第三个对象设置水材质
+                obj.data.materials.append(bpy.data.materials["Water"])
 
     # 设置输出路径
     scene.render.filepath = os.path.join(output_path, f"frame_{frame_idx:06d}.png")
