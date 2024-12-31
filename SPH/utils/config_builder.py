@@ -1,33 +1,44 @@
+# copied from https://github.com/erizmr/SPH_Taichi/blob/master/config_builder.py
 import json
-from typing import Dict, List, Optional, Any
+
 
 class SimConfig:
-    """模拟配置管理器"""
-    
-    def __init__(self, scene_file_path: str) -> None:
-        """从JSON文件加载配置"""
+    def __init__(self, scene_file_path) -> None:
+        self.config = None
         with open(scene_file_path, "r") as f:
-            self.config: Dict[str, Any] = json.load(f)
+            self.config = json.load(f)
         print(self.config)
     
-    def get_cfg(self, name: str, enforce_exist: bool = False) -> Optional[Any]:
-        """获取指定名称的配置值"""
+    def get_cfg(self, name, enforce_exist=False):
         if enforce_exist:
             assert name in self.config["Configuration"]
-        return self.config["Configuration"].get(name)
-
-    def _get_bodies(self, key: str) -> List[Dict[str, Any]]:
-        """通用的物体配置获取方法"""
-        return self.config.get(key, [])
-
-    def get_rigid_bodies(self) -> List[Dict[str, Any]]:
-        return self._get_bodies("RigidBodies")
+        if name not in self.config["Configuration"]:
+            if enforce_exist:
+                assert name in self.config["Configuration"]
+            else:
+                return None
+        return self.config["Configuration"][name]
     
-    def get_rigid_blocks(self) -> List[Dict[str, Any]]:
-        return self._get_bodies("RigidBlocks")
-
-    def get_fluid_bodies(self) -> List[Dict[str, Any]]:
-        return self._get_bodies("FluidBodies")
+    def get_rigid_bodies(self):
+        if "RigidBodies" in self.config:
+            return self.config["RigidBodies"]
+        else:
+            return []
     
-    def get_fluid_blocks(self) -> List[Dict[str, Any]]:
-        return self._get_bodies("FluidBlocks")
+    def get_rigid_blocks(self):
+        if "RigidBlocks" in self.config:
+            return self.config["RigidBlocks"]
+        else:
+            return []
+
+    def get_fluid_bodies(self):
+        if "FluidBodies" in self.config:
+            return self.config["FluidBodies"]
+        else:
+            return []
+    
+    def get_fluid_blocks(self):
+        if "FluidBlocks" in self.config:
+            return self.config["FluidBlocks"]
+        else:
+            return []

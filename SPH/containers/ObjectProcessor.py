@@ -50,33 +50,75 @@ def load_fluid_body(dim, fluid_body, pitch):
     new_positions = new_positions[inside]
     return new_positions
 
-    points = mesh.voxelized(pitch=pitch).fill().points
-    print(f"刚体 {body_config['objectId']} 粒子数: {len(points)}")
-    return points
+def rigid_body_processor(config: SimConfig,diameter):
+    rigid_bodies = config.get_rigid_bodies()
+    rigid_body_num = 0
+    for rigid_body in rigid_bodies:
+        voxelized_points_np = load_rigid_body(rigid_body, pitch=diameter)
+        rigid_body["particleNum"] = voxelized_points_np.shape[0]
+        rigid_body["voxelizedPoints"] = voxelized_points_np
+        rigid_body_num += voxelized_points_np.shape[0]
+    return rigid_body_num
 
-def fluid_block_processor(dim, config: SimConfig, diameter):
-    """流体块处理"""
-    total_particles = 0
-    for fluid in config.get_fluid_blocks():
-        num = compute_particle_num(dim, fluid["start"], fluid["end"], diameter)
-        fluid["particleNum"] = num
-        total_particles += num
-    return total_particles
+def load_rigid_body(rigid_body, pitch):
+        obj_id = rigid_body["objectId"]
+        mesh = tm.load(rigid_body["geometryFile"])
+        mesh.apply_scale(rigid_body["scale"])
 
-def compute_particle_num(dim, start, end, spacing):
-    """计算区域内粒子数"""
-    return reduce(lambda x, y: x * y, 
-                 [len(np.arange(start[i], end[i], spacing)) for i in range(dim)])
+        if rigid_body["isDynamic"] == False:
+            offset = np.array(rigid_body["translation"])
+            angle = rigid_body["rotationAngle"] / 360 * 2 * PI
+            direction = rigid_body["rotationAxis"]
+            rot_matrix = tm.transformations.rotation_matrix(angle, direction, mesh.vertices.mean(axis=0))
+            mesh.apply_transform(rot_matrix)
+            mesh.vertices += offset
+        
+        # Backup the original mesh for exporting obj
+        mesh_backup = mesh.copy()
+        rigid_body["mesh"] = mesh_backup
+        rigid_body["restPosition"] = mesh_backup.vertices
+        rigid_body["restCenterOfMass"] = np.array([0.0, 0.0, 0.0]) 
+
+        voxelized_mesh = mesh.voxelized(pitch=pitch)
+        voxelized_mesh = mesh.voxelized(pitch=pitch).fill()
+        voxelized_points_np = voxelized_mesh.points
+        print(f"rigid body {obj_id} num: {voxelized_points_np.shape[0]}")
+        
+        return voxelized_points_np
+
+def fluid_block_processor(dim, config: SimConfig,diameter):
+    fluid_blocks = config.get_fluid_blocks()
+    fluid_block_num = 0
+    for fluid in fluid_blocks:
+        particle_num = compute_cube_particle_num(dim, fluid["start"], fluid["end"], space=diameter)
+        fluid["particleNum"] = particle_num
+        fluid_block_num += particle_num
+    return fluid_block_num
+
+def compute_cube_particle_num(dim, domain_start, domain_end, space):
+        num_dim = []
+        for i in range(dim):
+            num_dim.append(
+                np.arange(domain_start[i], domain_end[i], space))
+        return reduce(lambda x, y: x * y,
+                                   [len(n) for n in num_dim])
 
 def compute_box_particle_num(dim, domain_start, domain_end, diameter, thickness):
-    """计算边界盒粒子数"""
-    points = create_grid_points(dim, (domain_start, domain_end), diameter)
-    
-    # 边界条件合并
-    mask = np.zeros(len(points), dtype=bool)
-    for i in range(dim):
-        mask |= ((points[:, i] <= domain_start[i] + thickness) | 
-                (points[:, i] >= domain_end[i] - thickness))
-    
-    return np.sum(mask)
+        num_dim = []
+        for i in range(dim):
+            num_dim.append(
+                np.arange(domain_start[i], domain_end[i], diameter))
+        
+        new_positions = np.array(np.meshgrid(*num_dim,
+                                             sparse=False,
+                                             indexing='ij'),
+                                 dtype=np.float32)
+        new_positions = new_positions.reshape(-1,
+                                              reduce(lambda x, y: x * y, list(new_positions.shape[1:]))).transpose()
+        
+        mask = np.zeros(new_positions.shape[0], dtype=bool)
+        for i in range(dim):
+            mask = mask | ((new_positions[:, i] <= domain_start[i] + thickness) | (new_positions[:, i] >= domain_end[i] - thickness))
+        new_positions = new_positions[mask]
+        return new_positions.shape[0]
         
