@@ -13,11 +13,11 @@ class BaseSolver():
         self.cfg = container.cfg
 
         # Gravity
-        self.g = np.array(self.container.cfg.get_cfg("gravitation"))
+        self.g = np.array(self.cfg.get_cfg("gravitation"))
 
         # density
         self.density = 1000.0
-        self.density_0 = self.container.cfg.get_cfg("density0")
+        self.density_0 = self.cfg.get_cfg("density0")
 
         # surface tension
         if self.container.cfg.get_cfg("surface_tension"):
@@ -26,9 +26,9 @@ class BaseSolver():
             self.surface_tension = 0.01
 
         # viscosity
-        self.viscosity = self.container.cfg.get_cfg("viscosity")
-        if self.container.cfg.get_cfg("viscosity_b"):
-            self.viscosity_b = self.container.cfg.get_cfg("viscosity_b")
+        self.viscosity = self.cfg.get_cfg("viscosity")
+        if self.cfg.get_cfg("viscosity_b"):
+            self.viscosity_b = self.cfg.get_cfg("viscosity_b")
         else:
             self.viscosity_b = self.viscosity
 
@@ -85,15 +85,6 @@ class BaseSolver():
             volume += self.kernel.weight(distance, self.container.dh)
 
     @ti.kernel
-    def init_acceleration(self):
-        self.container.particle_accelerations.fill(0.0)
-
-    @ti.kernel
-    def init_rigid_body_force_and_torque(self):
-        self.container.rigid_body_forces.fill(0.0)
-        self.container.rigid_body_torques.fill(0.0)
-
-    @ti.kernel
     def compute_pressure_acceleration(self):
         """
         Compute the pressure acceleration for each particle.
@@ -108,40 +99,6 @@ class BaseSolver():
                     self.container.for_all_neighbors(p_i, self.compute_pressure_acceleration_task, acceleration)
                     # Assign computed acceleration to the particle
                     self.container.particle_accelerations[p_i] = acceleration
-
-    @ti.func
-    def compute_pressure_acceleration_task(self, p_i, p_j, acceleration: ti.template()):
-        """
-        Compute the pressure acceleration contribution from neighboring particles.
-        """
-        # Get positions of particles i and j
-        pos_i = self.container.particle_positions[p_i]
-        pos_j = self.container.particle_positions[p_j]
-        # Compute the distance vector between particles i and j
-        R = pos_i - pos_j
-        # Compute the gradient of the kernel function
-        nabla_ij = self.kernel.gradient(R, self.container.dh)
-
-        if self.container.particle_materials[p_j] == self.container.material_fluid:
-            # Update the acceleration with the pressure contribution from particle j
-            acceleration += -self.container.particle_masses[p_j] * (
-                (self.container.particle_pressures[p_i] / (self.container.particle_densities[p_i] ** 2) +
-                self.container.particle_pressures[p_j] / (self.container.particle_densities[p_j] ** 2)) * nabla_ij)
-
-        elif self.container.particle_materials[p_j] == self.container.material_rigid:
-            # Update the acceleration with the pressure contribution from particle j
-            acceleration += -self.container.particle_masses[p_j] * (
-                self.container.particle_pressures[p_i] / (self.container.particle_densities[p_i] ** 2)) * nabla_ij
-
-            if self.container.particle_is_dynamic[p_j]:
-                # If the rigid particle is dynamic, compute the force and torque
-                object_j = self.container.particle_object_ids[p_j]
-                force_j = self.container.particle_masses[p_j] * (
-                    self.container.particle_pressures[p_i] / (self.container.particle_densities[p_i] ** 2)) * nabla_ij * self.container.particle_masses[p_i]
-                torque_j = ti.math.cross(pos_i - self.container.rigid_body_com[object_j], force_j)
-                # Update the force and torque of the rigid body
-                self.container.rigid_body_forces[object_j] += force_j
-                self.container.rigid_body_torques[object_j] += torque_j
 
     def compute_non_pressure_acceleration(self):
         # computing acceleration from gravity, surface tension and viscosity
@@ -321,7 +278,6 @@ class BaseSolver():
                     if self.container.particle_positions[p_i][1] <= self.g_upper:
                         self.container.particle_materials[p_i] = self.container.material_fluid
         
-            
     @ti.kernel
     def prepare_emitter(self):
         for p_i in range(self.container.particle_num[None]):

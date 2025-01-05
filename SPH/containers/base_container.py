@@ -13,9 +13,7 @@ class BaseContainer:
         self.total_time = 0
 
         self.gravity = ti.Vector([0.0, -9.81, 0.0])
-        self.domain_start = np.array([0.0, 0.0, 0.0])
         self.domain_start = np.array(self.cfg.get_cfg("domainStart"))
-        self.domain_end = np.array([1.0, 1.0, 1.0])
         self.domain_end = np.array(self.cfg.get_cfg("domainEnd"))
 
         self.domain_size = self.domain_end - self.domain_start
@@ -23,7 +21,6 @@ class BaseContainer:
         self.material_rigid = 2
         self.material_fluid = 1
 
-        self.radius = 0.01 
         self.radius = self.cfg.get_cfg("particleRadius")
         self.diameter = 2 * self.radius
         self.V0 = 0.8 * self.diameter ** self.dim
@@ -34,7 +31,6 @@ class BaseContainer:
         self.grid_size = self.dh
         self.padding = self.grid_size
         self.boundary_thickness = 0.0
-        self.add_boundary = False
         self.add_boundary = self.cfg.get_cfg("addDomainBox")
         
         if self.add_boundary:
@@ -55,8 +51,7 @@ class BaseContainer:
         self.fluid_blocks = self.cfg.get_fluid_blocks()
         self.rigid_bodies = self.cfg.get_rigid_bodies()
 
-        self.fluid_particle_num = op.fluid_body_processor(self.dim, self.cfg, self.diameter)
-        self.fluid_particle_num += op.fluid_block_processor(self.dim, self.cfg, self.diameter)
+        self.fluid_particle_num = op.fluid_block_processor(self.dim, self.cfg, self.diameter)
         self.rigid_particle_num = op.rigid_body_processor(self.cfg, self.diameter)      
         self.particle_max_num = (self.fluid_particle_num + self.rigid_particle_num 
                                 + (op.compute_box_particle_num(self.dim, self.domain_start, self.domain_end, diameter = self.diameter, thickness=self.boundary_thickness) if self.add_boundary else 0)
@@ -199,47 +194,6 @@ class BaseContainer:
                 )
             
             self.present_object.append(obj_id)
-            
-        #fluid body 
-        for fluid in self.fluid_bodies:
-            obj_id = fluid["objectId"]
-            
-            if obj_id in self.present_object:
-                continue
-            if fluid["entryTime"] > self.total_time:
-                continue
-            
-            particle_num = fluid["particleNum"]
-            voxelized_points_np = fluid["voxelizedPoints"]
-            velocity = np.array(fluid["velocity"], dtype=np.float32)
-            
-            density = fluid["density"]
-            color = np.array(fluid["color"], dtype=np.int32)
-            
-            if "visible" in fluid:
-                self.object_visibility[obj_id] = fluid["visible"]
-            else:
-                self.object_visibility[obj_id] = 1
-            
-            self.object_id_fluid_body.add(obj_id)
-            self.object_materials[obj_id] = self.material_fluid
-            self.object_densities[obj_id] = density
-            self.object_collection[obj_id] = fluid
-            
-            self.add_particles(
-                obj_id,
-                particle_num,
-                np.array(voxelized_points_np, dtype=np.float32), # position
-                np.stack([velocity for _ in range(particle_num)]), # velocity
-                density * np.ones(particle_num, dtype=np.float32), # density
-                np.zeros(particle_num, dtype=np.float32), # pressure
-                np.array([self.material_fluid for _ in range(particle_num)], dtype=np.int32), 
-                1 * np.ones(particle_num, dtype=np.int32), # dynamic
-                np.stack([color for _ in range(particle_num)])
-            )
-            
-            self.present_object.append(obj_id)
-            self.fluid_particle_num += particle_num
         
         #rigid body
         for rigid in self.rigid_bodies:

@@ -6,50 +6,6 @@ from ..utils import SimConfig
 
 PI = 3.1415926
 
-def fluid_body_processor(dim, config: SimConfig, diameter):
-    fluid_bodies = config.get_fluid_bodies()
-    fluid_body_num = 0
-    for fluid_body in fluid_bodies:
-        voxelized_points_np = load_fluid_body(dim, fluid_body, pitch=diameter)
-        fluid_body["particleNum"] = voxelized_points_np.shape[0]
-        fluid_body["voxelizedPoints"] = voxelized_points_np
-        fluid_body_num += voxelized_points_np.shape[0]
-    return fluid_body_num
-
-
-def load_fluid_body(dim, fluid_body, pitch):
-    mesh = tm.load(fluid_body["geometryFile"])
-    mesh.apply_scale(fluid_body["scale"])
-    offset = np.array(fluid_body["translation"])
-
-    angle = fluid_body["rotationAngle"] / 360 * 2 * np.pi
-    direction = fluid_body["rotationAxis"]
-    rot_matrix = tm.transformations.rotation_matrix(angle, direction, mesh.vertices.mean(axis=0))
-    mesh.apply_transform(rot_matrix)
-    mesh.vertices += offset
-
-    min_point, max_point = mesh.bounding_box.bounds
-    num_dim = []
-    for i in range(dim):
-        num_dim.append(np.arange(min_point[i], max_point[i], pitch))
-    
-    new_positions = np.array(np.meshgrid(*num_dim, sparse=False, indexing='ij'), dtype=np.float32)
-    new_positions = new_positions.reshape(-1, reduce(lambda x, y: x * y, list(new_positions.shape[1:]))).transpose()
-    
-    print(f"processing {len(new_positions)} points to decide whether they are inside the mesh. This might take a while.")
-    inside = [False for _ in range(len(new_positions))]
-
-    pbar = tqdm(total=len(new_positions))
-    for i in range(len(new_positions)):
-        if mesh.contains([new_positions[i]])[0]:
-            inside[i] = True
-        pbar.update(1)
-
-    pbar.close()
-
-    new_positions = new_positions[inside]
-    return new_positions
-
 def rigid_body_processor(config: SimConfig,diameter):
     rigid_bodies = config.get_rigid_bodies()
     rigid_body_num = 0

@@ -7,12 +7,11 @@
 		"particleRadius": 0.01,
 		"fps": 30.0,
 		"totalTime": 15.0,
-		"numberOfStepsPerRenderUpdate": 1,
 		"density0": 1000, 
 		"gravitation": [0.0, -9.81, 0.0],
 		"simulationMethod": "dfsph_L",
 		"viscosityMethod": "standard",
-		"timeStepSize": 0.00005,
+		"timeStepSize": 0.001,
 		"surface_tension":0.06,
 		"viscosity":10.0,
         "viscosity_b": 0.3,
@@ -41,7 +40,7 @@
 			"translation": [0.0, 0.0, 0.0],
 			"scale": [1, 1, 1],
 			"velocity": [0.0, -0.5, 0.0],
-			"density": 800.0,
+			"density": 1000.0,
 			"color": [200, 105, 201],
 			"entryTime": -1.0
 		}

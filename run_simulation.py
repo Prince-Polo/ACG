@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
     window = ti.ui.Window('SPH', (1024, 1024), show_window = False, vsync=False)
 
-    scene = ti.ui.Scene()
+    scene = window.get_scene()
     # feel free to adjust the position of the camera as needed
     camera = ti.ui.Camera()
     camera.position(5.5, 2.5, 4.0)
