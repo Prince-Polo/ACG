@@ -8,144 +8,209 @@ from SPH.fluid_solvers import DFSPHSolver, IISPHSolver, DFSPH_LSolver, WCSPHSolv
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.8)
 
-#! due to code legacy, please use domain_start = [0, 0, 0]
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--scene_file',
-                        default='',
-                        help='scene file')
-    args = parser.parse_args()
-    scene_path = args.scene_file
-    config = SimConfig(scene_file_path=scene_path)
-    scene_name = scene_path.split("/")[-1].split(".")[0]
-
-    output_frames = config.get_cfg("exportFrame")
-
-    fps = config.get_cfg("fps")
-    if fps == None:
-        fps = 60
-
-    frame_time = 1.0 / fps
-
-    output_interval = int(frame_time / config.get_cfg("timeStepSize"))
-
-    total_time = config.get_cfg("totalTime")
-    if total_time == None:
-        total_time = 10.0
-
-    total_rounds = int(total_time / config.get_cfg("timeStepSize"))
+class PhysicsSimulator:
+    """物理模拟系统"""
     
-    if config.get_cfg("outputInterval"):
-        output_interval = config.get_cfg("outputInterval")
-
-    output_ply = config.get_cfg("exportPly")
-    output_obj = config.get_cfg("exportObj")
-
-    os.makedirs(f"{scene_name}_output", exist_ok=True)
-
-    simulation_method = config.get_cfg("simulationMethod")
-    if simulation_method == "dfsph":
-        container = DFSPHContainer(config, GGUI=True)
-        solver = DFSPHSolver(container)
-    elif simulation_method == "iisph":
-        container = IISPHContainer(config, GGUI=True)
-        solver = IISPHSolver(container)
-    elif simulation_method == "dfsph_L":
-        container = DFSPHContainer(config, GGUI=True)
-        solver = DFSPH_LSolver(container)
-    elif simulation_method == "wcsph":
-        container = BaseContainer(config, GGUI=True)
-        solver = WCSPHSolver(container)
-    else:
-        raise NotImplementedError(f"Simulation method {simulation_method} not implemented")
-
-    solver.prepare()
-
-    window = ti.ui.Window('SPH', (1024, 1024), show_window = False, vsync=False)
-
-    scene = window.get_scene()
-    # feel free to adjust the position of the camera as needed
-    camera = ti.ui.Camera()
-    camera.position(5.5, 2.5, 4.0)
-    camera.up(0.0, 1.0, 0.0)
-    camera.lookat(-1.0, 0.0, 0.0)
-    camera.fov(70)
-    scene.set_camera(camera)
-
-    canvas = window.get_canvas()
-    radius = 0.002
-    movement_speed = 0.02
-    background_color = (0, 0, 0)  # 0xFFFFFF
-    particle_color = (1, 1, 1)
-
-    # Invisible objects
-    invisible_objects = config.get_cfg("invisibleObjects")
-    if not invisible_objects:
-        invisible_objects = []
-
-    # Draw the lines for domain
-    domain_end = config.get_cfg("domainEnd")
-    dim = len(domain_end)
-    if len(domain_end) == 3:
-        x_max, y_max, z_max = domain_end
-        box_anchors = ti.Vector.field(3, dtype=ti.f32, shape = 8)
-        box_anchors[0] = ti.Vector([0.0, 0.0, 0.0])
-        box_anchors[1] = ti.Vector([0.0, y_max, 0.0])
-        box_anchors[2] = ti.Vector([x_max, 0.0, 0.0])
-        box_anchors[3] = ti.Vector([x_max, y_max, 0.0])
-
-        box_anchors[4] = ti.Vector([0.0, 0.0, z_max])
-        box_anchors[5] = ti.Vector([0.0, y_max, z_max])
-        box_anchors[6] = ti.Vector([x_max, 0.0, z_max])
-        box_anchors[7] = ti.Vector([x_max, y_max, z_max])
-
-    box_lines_indices = ti.field(int, shape=(2 * 12))
-
-    for i, val in enumerate([0, 1, 0, 2, 1, 3, 2, 3, 4, 5, 4, 6, 5, 7, 6, 7, 0, 4, 1, 5, 2, 6, 3, 7]):
-        box_lines_indices[i] = val
-
-    cnt = 0
-    cnt_ply = 0
-
-    while window.running:
-        solver.step()
-        container.copy_to_vis_buffer(invisible_objects=invisible_objects, dim=dim)
-        if container.dim == 2:
-            canvas.set_background_color(background_color)
-            canvas.circles(container.x_vis_buffer, radius=container.dx / 80.0, color=particle_color)
-        elif container.dim == 3:
-            scene.set_camera(camera)
-
-            scene.point_light((2.0, 2.0, 2.0), color=(1.0, 1.0, 1.0))
-            scene.particles(container.x_vis_buffer, radius=container.radius, per_vertex_color=container.color_vis_buffer)
-
-            scene.lines(box_anchors, indices=box_lines_indices, color = (0.99, 0.68, 0.28), width = 1.0)
-            canvas.scene(scene)
-    
-        if output_frames:
-            if cnt % output_interval == 0:
-                os.makedirs(f"{scene_name}_output/{cnt:06}", exist_ok=True)
-                window.save_image(f"{scene_name}_output/{cnt:06}/raw_view.png")
+    def __init__(self, scene_path: str):
+        self.scene_path = scene_path
+        self.scene_name = os.path.splitext(os.path.basename(scene_path))[0]
+        self.config = SimConfig(scene_file_path=scene_path)
+        self._prepare_simulation()
         
-        if cnt % output_interval == 0:
-            if output_ply:
-                os.makedirs(f"{scene_name}_output/{cnt:06}", exist_ok=True)
-                for f_body_id in container.object_id_fluid_body:
-                    obj_data = container.dump(obj_id=f_body_id)
-                    np_pos = obj_data["position"]
-                    writer = ti.tools.PLYWriter(num_vertices=container.object_collection[f_body_id]["particleNum"])
-                    writer.add_vertex_pos(np_pos[:, 0], np_pos[:, 1], np_pos[:, 2])
-                    writer.export_ascii(f"{scene_name}_output/{cnt:06}/particle_object_{f_body_id}.ply")
-            if output_obj:
-                os.makedirs(f"{scene_name}_output/{cnt:06}", exist_ok=True)
-                for r_body_id in container.object_id_rigid_body:
-                    with open(f"{scene_name}_output/{cnt:06}/mesh_object_{r_body_id}.obj", "w") as f:
-                        e = container.object_collection[r_body_id]["mesh"].export(file_type='obj')
-                        f.write(e)
+    def _prepare_simulation(self):
+        """准备模拟环境"""
+        self._init_timing()
+        self._init_output()
+        self._init_domain()
+        self._init_solver()
+        self._init_render_window()
+        
+    def _init_timing(self):
+        """初始化时间参数"""
+        self.time_step = self.config.get_cfg("timeStepSize")
+        self.fps = self.config.get_cfg("fps") or 60
+        self.total_time = self.config.get_cfg("totalTime") or 10.0
+        self.output_interval = self.config.get_cfg("outputInterval") or int(1.0 / (self.fps * self.time_step))
+        self.max_steps = int(self.total_time / self.time_step)
+        
+    def _init_output(self):
+        """初始化输出设置"""
+        self.output_root = f"output_{self.scene_name}"
+        os.makedirs(self.output_root, exist_ok=True)
+        
+        self.save_frame = self.config.get_cfg("exportFrame")
+        self.save_ply = self.config.get_cfg("exportPly")
+        self.save_obj = self.config.get_cfg("exportObj")
+        
+    def _init_domain(self):
+        """初始化模拟域"""
+        self.domain_end = self.config.get_cfg("domainEnd")
+        self.dim = len(self.domain_end)
+        self._setup_boundary()
+        
+    def _setup_boundary(self):
+        """设置边界数据"""
+        if self.dim == 3:
+            self._setup_3d_boundary()
+        else:
+            self._setup_2d_boundary()
+            
+    def _setup_3d_boundary(self):
+        """设置3D边界"""
+        x, y, z = self.domain_end
+        vertices = []
+        indices = []
+        
+        # 定义立方体的8个顶点
+        corners = [
+            (0,0,0), (x,0,0), (x,y,0), (0,y,0),
+            (0,0,z), (x,0,z), (x,y,z), (0,y,z)
+        ]
+        
+        # 定义12条边的连接关系
+        edges = [
+            (0,1), (1,2), (2,3), (3,0),  # 底面
+            (4,5), (5,6), (6,7), (7,4),  # 顶面
+            (0,4), (1,5), (2,6), (3,7)   # 连接线
+        ]
+        
+        # 创建顶点和索引数组
+        self.box_vertices = ti.Vector.field(3, dtype=ti.f32, shape=len(corners))
+        self.box_indices = ti.field(int, shape=len(edges) * 2)
+        
+        # 填充数据
+        for i, pos in enumerate(corners):
+            self.box_vertices[i] = pos
+            
+        for i, (start, end) in enumerate(edges):
+            self.box_indices[i*2] = start
+            self.box_indices[i*2+1] = end
+            
+    def _setup_2d_boundary(self):
+        """设置2D边界"""
+        x, y = self.domain_end
+        corners = [(0,0), (x,0), (x,y), (0,y)]
+        
+        self.box_vertices = ti.Vector.field(2, dtype=ti.f32, shape=4)
+        self.box_indices = ti.field(int, shape=8)
+        
+        for i, pos in enumerate(corners):
+            self.box_vertices[i] = pos
+            self.box_indices[i*2] = i
+            self.box_indices[i*2+1] = (i + 1) % 4
+            
+    def _init_solver(self):
+        """初始化求解器"""
+        method = self.config.get_cfg("simulationMethod")
+        solver_map = {
+            "dfsph": (DFSPHContainer, DFSPHSolver),
+            "iisph": (IISPHContainer, IISPHSolver),
+            "dfsph_L": (DFSPHContainer, DFSPH_LSolver),
+            "wcsph": (BaseContainer, WCSPHSolver)
+        }
+        
+        if method not in solver_map:
+            raise ValueError(f"未支持的模拟方法: {method}")
+            
+        container_cls, solver_cls = solver_map[method]
+        self.container = container_cls(self.config, GGUI=True)
+        self.solver = solver_cls(self.container)
+        
+    def _init_render_window(self):
+        """初始化渲染窗口"""
+        self.window = ti.ui.Window("物理模拟", (1024, 1024), 
+                                 show_window=False, vsync=False)
+        self.scene = self.window.get_scene()
+        self._setup_camera()
+        
+    def _setup_camera(self):
+        """设置相机参数"""
+        camera = ti.ui.Camera()
+        camera.position(4.0, 3.0, 3.0)
+        camera.lookat(0.0, 1.0, 0.0)
+        camera.fov(65)
+        self.scene.set_camera(camera)
+        
+    def _save_outputs(self, step):
+        """保存输出文件"""
+        if step % self.output_interval != 0:
+            return
+            
+        frame_dir = f"{self.output_root}/{step:06d}"
+        os.makedirs(frame_dir, exist_ok=True)
+        
+        if self.save_frame:
+            self.window.save_image(f"{frame_dir}/frame.png")
+            
+        if self.save_ply:
+            self._save_particles(frame_dir)
+            
+        if self.save_obj:
+            self._save_meshes(frame_dir)
+            
+    def _save_particles(self, directory):
+        """保存粒子数据"""
+        for body_id in self.container.object_id_fluid_body:
+            data = self.container.dump(obj_id=body_id)
+            pos = data["position"]
+            
+            writer = ti.tools.PLYWriter(num_vertices=len(pos))
+            writer.add_vertex_pos(pos[:, 0], pos[:, 1], 
+                                pos[:, 2] if self.dim == 3 else None)
+            writer.export_ascii(f"{directory}/fluid_{body_id}.ply")
+            
+    def _save_meshes(self, directory):
+        """保存网格数据"""
+        for body_id in self.container.object_id_rigid_body:
+            mesh = self.container.object_collection[body_id]["mesh"]
+            with open(f"{directory}/rigid_{body_id}.obj", 'w') as f:
+                f.write(mesh.export(file_type='obj'))
+                
+    def _update_visualization(self):
+        """更新可视化"""
+        self.container.copy_to_vis_buffer(
+            invisible_objects=self.config.get_cfg("invisibleObjects", []),
+            dim=self.dim
+        )
+        
+        # 设置场景
+        self.scene.ambient_light((0.1, 0.1, 0.15))
+        self.scene.point_light(pos=(2, 2, 2), color=(1, 1, 1))
+        
+        # 渲染粒子
+        self.scene.particles(self.container.x_vis_buffer,
+                            radius=self.container.radius,
+                            per_vertex_color=self.container.color_vis_buffer)
+        
+        # 渲染边界
+        self.scene.lines(self.box_vertices,
+                        indices=self.box_indices,
+                        color=(0.6, 0.6, 0.8),
+                        width=2.0)
+        
+        # 更新画布
+        canvas = self.window.get_canvas()
+        canvas.scene(self.scene)
+        
+    def execute(self):
+        """执行模拟"""
+        self.solver.prepare()
+        
+        for step in range(self.max_steps):
+            if not self.window.running:
+                break
+                
+            self.solver.step()
+            self._update_visualization()
+            self._save_outputs(step)
+            
+        print("模拟完成")
 
-        cnt += 1
 
-        if cnt >= total_rounds:
-            break
-
-    print(f"Simulation Finished")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="物理模拟系统")
+    parser.add_argument('--scene_file', required=True, help='场景配置文件路径')
+    args = parser.parse_args()
+    
+    simulator = PhysicsSimulator(args.scene_file)
+    simulator.execute()
