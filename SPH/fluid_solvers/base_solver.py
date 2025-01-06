@@ -265,32 +265,20 @@ class BaseSolver():
     @ti.kernel
     def prepare_emitter(self):
         for p_i in range(self.container.particle_num[None]):
-            self._check_and_convert_particle(p_i)
-            
-    @ti.func
-    def _check_and_convert_particle(self, idx: int):
-        if self._should_convert_to_rigid(idx):
-            self.container.particle_materials[idx] = self.container.material_rigid
+            if self._should_convert_to_rigid(p_i):
+                self.container.particle_materials[p_i] = self.container.material_rigid
             
     @ti.func
     def _should_convert_to_rigid(self, idx: int) -> ti.i32:
         pos = self.container.particle_positions[idx]
-        return self._is_fluid_particle(idx) and pos[1] > self.g_upper
-            
-    @ti.func
-    def _is_fluid_particle(self, idx: int) -> ti.i32:
-        return self.container.particle_materials[idx] == self.container.material_fluid
+        return self.container.particle_materials[idx] == self.container.material_fluid and pos[1] > self.g_upper
 
     @ti.kernel
     def init_object_id(self):
         """初始化对象ID"""
-        self._reset_particle_ids()
-        
-    @ti.func
-    def _reset_particle_ids(self):
         for i in range(self.container.particle_num[None]):
             self.container.particle_object_ids[i] = -1
-
+            
     def prepare(self):
         print("initializing object id")
         self.init_object_id()
