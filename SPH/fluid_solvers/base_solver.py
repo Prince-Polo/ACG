@@ -34,7 +34,6 @@ class BaseSolver():
 
         # time step
         self.dt = ti.field(float, shape=())
-        self.dt[None] = 1e-4
         self.dt[None] = self.cfg.get_cfg("timeStepSize")
 
         # kernel
@@ -85,43 +84,89 @@ class BaseSolver():
             volume += self.kernel.weight(distance, self.container.dh)
 
     def compute_non_pressure_acceleration(self):
-        # computing acceleration from gravity, surface tension and viscosity
-        self.compute_gravity_acceleration()
-        self.compute_surface_tension_acceleration()
+        """计算非压力加速度项"""
+        self._process_gravity()
+        self._process_surface()
         self.compute_viscosity_acceleration()
         
+    def _process_gravity(self):
+        """处理重力加速度"""
+        self.compute_gravity_acceleration()
+        
+    def _process_surface(self):
+        """处理表面张力"""
+        self.compute_surface_tension_acceleration()
+
     @ti.kernel
     def compute_gravity_acceleration(self):
-        # assign g to all fluid particles, not +=
-        for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_fluid:
-                self.container.particle_accelerations[p_i] =  ti.Vector(self.g)
+        """重力加速度计算"""
+        self._assign_gravity_to_particles()
+                
+    @ti.func
+    def _assign_gravity_to_particles(self):
+        for idx in range(self.container.particle_num[None]):
+            self._update_gravity_acc(idx)
+                
+    @ti.func
+    def _update_gravity_acc(self, p_i: int):
+        if self.container.particle_materials[p_i] == self.container.material_fluid:
+            self.container.particle_accelerations[p_i] = ti.Vector(self.g)
 
     @ti.kernel
     def compute_surface_tension_acceleration(self):
+        """表面张力加速度计算"""
+        self._iterate_particles_for_tension()
+                
+    @ti.func
+    def _iterate_particles_for_tension(self):
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_fluid:
-                # Initialize acceleration vector
-                a_i = ti.Vector([0.0 for _ in range(self.container.dim)])
-                # Iterate over all neighbors to compute the surface tension acceleration
-                self.container.for_all_neighbors(p_i, self.compute_surface_tension_acceleration_task, a_i)
-                # Add computed acceleration to the particle's acceleration
-                self.container.particle_accelerations[p_i] += a_i
+            self._handle_particle_tension(p_i)
+                
+    @ti.func
+    def _handle_particle_tension(self, p_i: int):
+        material = self.container.particle_materials[p_i]
+        if material == self.container.material_fluid:
+            acc = ti.Vector([0.0 for _ in range(self.container.dim)])
+            self._accumulate_tension_force(p_i, acc)
+            self._apply_tension_acc(p_i, acc)
+                
+    @ti.func
+    def _accumulate_tension_force(self, p_i: int, acc: ti.template()):
+        self.container.for_all_neighbors(p_i, self.compute_surface_tension_acceleration_task, acc)
+                
+    @ti.func
+    def _apply_tension_acc(self, p_i: int, acc: ti.template()):
+        self.container.particle_accelerations[p_i] += acc
 
     @ti.func
-    def compute_surface_tension_acceleration_task(self, p_i, p_j, a_i: ti.template()):
+    def compute_surface_tension_acceleration_task(self, p_i, p_j, acc: ti.template()):
+        """计算单个粒子对的表面张力"""
+        if self._check_fluid_particle(p_j):
+            self._compute_tension_contribution(p_i, p_j, acc)
+                
+    @ti.func
+    def _check_fluid_particle(self, idx: int) -> ti.i32:
+        return self.container.particle_materials[idx] == self.container.material_fluid
+                
+    @ti.func
+    def _compute_tension_contribution(self, p_i: int, p_j: int, acc: ti.template()):
         pos_i = self.container.particle_positions[p_i]
-        if self.container.particle_materials[p_j] == self.container.material_fluid:
-            # Fluid neighbors
-            pos_j = self.container.particle_positions[p_j]
-            R = pos_i - pos_j
-            R2 = R.norm_sqr()
-            # Compute the mass ratio
-            mass_ratio = self.container.particle_masses[p_j] / self.container.particle_masses[p_i]
-            # Compute the weight based on the distance between particles
-            weight = self.kernel.weight(R.norm(), self.container.dh) if R2 > self.container.diameter * self.container.diameter else self.kernel.weight(self.container.diameter, self.container.dh)
-            # Update the acceleration with the surface tension contribution from particle j
-            a_i -= self.surface_tension * mass_ratio * R * weight
+        pos_j = self.container.particle_positions[p_j]
+        rel_pos = pos_i - pos_j
+        
+        dist2 = rel_pos.norm_sqr()
+        weight = self._calculate_weight(dist2, rel_pos)
+        mass_r = self.container.particle_masses[p_j] / self.container.particle_masses[p_i]
+        
+        acc -= self.surface_tension * mass_r * rel_pos * weight
+                
+    @ti.func
+    def _calculate_weight(self, dist2: float, rel_pos: ti.template()) -> float:
+        diam2 = self.container.diameter * self.container.diameter
+        dist = rel_pos.norm()
+        return (self.kernel.weight(dist, self.container.dh) 
+                if dist2 > diam2 
+                else self.kernel.weight(self.container.diameter, self.container.dh))
 
     @ti.kernel
     def compute_viscosity_acceleration(self):
