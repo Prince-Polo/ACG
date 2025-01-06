@@ -1,6 +1,5 @@
 from numba import float32, int32
 import numpy as np
-import numba
 from numba import cuda
 from . import ObjectProcessor as op
 from functools import reduce
@@ -8,65 +7,72 @@ from ..utils import SimConfig
 
 class BaseContainer:
     def __init__(self, config: SimConfig, GGUI = False):
-        self.dim = 3
-        self.GGUI = GGUI
-        self.cfg = config
-        self.total_time = 0.0
-        self.fluid_object_num = 0
-        self.rigid_object_num = 0
-        self.rigid_body_num = 0
-        
-        self.gravity = np.array([0.0, -9.81, 0.0])
-        self.domain_start = np.array([0.0, 0.0, 0.0])
-        self.domain_start = np.array(self.cfg.get_cfg("domainStart"))
-        self.domain_end = np.array([1.0, 1.0, 1.0])
-        self.domain_end = np.array(self.cfg.get_cfg("domainEnd"))
-        
-        self.domain_size = self.domain_end - self.domain_start
-        
-        self.material_rigid = 2
-        self.material_fluid = 1
-        
-        self.radius = 0.01 
-        self.radius = self.cfg.get_cfg("particleRadius")
-        self.diameter = 2 * self.radius
-        self.V0 = 0.8 * self.diameter ** self.dim
-        self.dh = 4 * self.radius
-        
-        self.max_object_num = 10
-        
-        self.grid_size = np.array([self.dh, self.dh, self.dh], dtype=np.float32)
-        self.padding = self.grid_size[0]
-        self.boundary_thickness = 0.0
-        self.add_boundary = False
+        # 基础属性
+        base_attrs = {
+            'dim': 3,
+            'GGUI': GGUI,
+            'cfg': config,
+            'total_time': 0.0,
+            'fluid_object_num': 0,
+            'rigid_object_num': 0,
+            'rigid_body_num': 0,
+            'max_object_num': 10,
+        }
+
+        # 物理参数
+        physics_attrs = {
+            'gravity': np.array([0.0, -9.81, 0.0]),
+            'domain_start': np.array(config.get_cfg("domainStart")),
+            'domain_end': np.array(config.get_cfg("domainEnd")),
+            'material_rigid': 2,
+            'material_fluid': 1,
+        }
+        physics_attrs['domain_size'] = physics_attrs['domain_end'] - physics_attrs['domain_start']
+
+        # 粒子参数  
+        self.radius = config.get_cfg("particleRadius")
+        particle_attrs = {
+            'radius': self.radius,
+            'diameter': 2 * self.radius,
+            'dh': 4 * self.radius,
+            'max_particles_per_cell': 500,
+            'max_neighbors': 60,
+            'padding': 4 * self.radius,
+            'boundary_thickness': 0.0,
+        }
+        particle_attrs['V0'] = 0.8 * particle_attrs['diameter'] ** base_attrs['dim']
+
+        # 设置属性
+        for attrs in [base_attrs, physics_attrs, particle_attrs]:
+            for key, value in attrs.items():
+                setattr(self, key, value)
+
+        # 边界处理
         self.add_boundary = self.cfg.get_cfg("addDomainBox")
-        
         if self.add_boundary:
             self.domain_start = np.array([self.domain_start[i] + self.padding for i in range(self.dim)])
             self.domain_end = np.array([self.domain_end[i] - self.padding for i in range(self.dim)])
             self.boundary_thickness = 0.03
-        
-        self.grid_num = np.ceil(self.domain_size / self.grid_size).astype(int)
-        
-        # All objects id and its particle num
+
+        # 初始化对象集合
         self.object_collection = dict()
         self.object_id_rigid_body = set()
-        self.object_id_fluid_body = set()
+        self.object_id_fluid_body = set() 
         self.present_object = []
-        
-        #========== Compute number of particles ==========#
+
+        # 计算粒子数量
         self.fluid_bodies = self.cfg.get_fluid_bodies()
         self.fluid_blocks = self.cfg.get_fluid_blocks()
         self.rigid_bodies = self.cfg.get_rigid_bodies()
-        
-        self.fluid_particle_num = op.fluid_body_processor(self.dim, self.cfg, self.diameter)
-        self.fluid_particle_num += op.fluid_block_processor(self.dim, self.cfg, self.diameter)
+
+        self.fluid_particle_num = op.fluid_block_processor(self.dim, self.cfg, self.diameter)
         self.rigid_particle_num = op.rigid_body_processor(self.cfg, self.diameter)      
         self.particle_max_num = (self.fluid_particle_num + self.rigid_particle_num 
-                                + (op.compute_box_particle_num(self.dim, self.domain_start, self.domain_end, diameter = self.diameter, thickness=self.boundary_thickness) if self.add_boundary else 0)
-                                )    
-        
-        #========== Initialize arrays ==========#
+                               + (op.compute_box_particle_num(self.dim, self.domain_start, self.domain_end, 
+                                                           diameter=self.diameter, 
+                                                           thickness=self.boundary_thickness) if self.add_boundary else 0))
+
+        # 初始化数组
         self._init_arrays()
 
     def _init_arrays(self):
@@ -78,7 +84,7 @@ class BaseContainer:
         self.rigid_object_num = 0
         self.rigid_particle_num = 0
         
-        # 粒子数组
+        # 粒子属性数组
         self.particle_positions = cuda.to_device(np.zeros((self.particle_max_num, self.dim), dtype=np.float32))
         self.particle_velocities = cuda.to_device(np.zeros((self.particle_max_num, self.dim), dtype=np.float32))
         self.particle_densities = cuda.to_device(np.zeros(self.particle_max_num, dtype=np.float32))
@@ -89,7 +95,7 @@ class BaseContainer:
         self.particle_materials = cuda.to_device(np.zeros(self.particle_max_num, dtype=np.int32))
         self.particle_colors = cuda.to_device(np.zeros((self.particle_max_num, 3), dtype=np.int32))
         
-        # 粒子力和加速度
+        # 粒子动力学属性
         self.particle_forces = cuda.to_device(np.zeros((self.particle_max_num, self.dim), dtype=np.float32))
         self.particle_accelerations = cuda.to_device(np.zeros((self.particle_max_num, self.dim), dtype=np.float32))
         
@@ -118,24 +124,17 @@ class BaseContainer:
         # 刚体粒子原始位置
         self.rigid_particle_original_positions = cuda.to_device(np.zeros((self.particle_max_num, self.dim), dtype=np.float32))
         
-        # 网格相关
-        self.grid_num_particles = cuda.to_device(np.zeros(reduce(lambda x, y: x * y, self.grid_num), dtype=np.int32))
-        self.grid_particle_ids = cuda.to_device(np.zeros(self.particle_max_num, dtype=np.int32))
-        self.grid_ids = cuda.to_device(np.zeros(self.particle_max_num, dtype=np.int32))
-        
-        # 邻居搜索
-        self.particle_neighbors = cuda.to_device(np.zeros((self.particle_max_num, 60), dtype=np.int32))
+        # 邻居搜索数组
+        self.particle_neighbors = cuda.to_device(np.zeros((self.particle_max_num, 500), dtype=np.int32))
         self.particle_neighbor_num = cuda.to_device(np.zeros(self.particle_max_num, dtype=np.int32))
         
         # 对象计数器
         self.fluid_object_num = cuda.to_device(np.array([0], dtype=np.int32))
         self.rigid_object_num = cuda.to_device(np.array([0], dtype=np.int32))
-        self.object_num = cuda.to_device(np.array([0], dtype=np.int32))
 
     def _calculate_max_particles(self):
         """计算最大粒子数"""
-        fluid_particle_num = op.fluid_body_processor(self.dim, self.cfg, self.diameter)
-        fluid_particle_num += op.fluid_block_processor(self.dim, self.cfg, self.diameter)
+        fluid_particle_num = op.fluid_block_processor(self.dim, self.cfg, self.diameter)
         rigid_particle_num = op.rigid_body_processor(self.cfg, self.diameter)
         
         if self.add_boundary:
@@ -152,78 +151,53 @@ class BaseContainer:
         return fluid_particle_num + rigid_particle_num + boundary_particle_num
     
     def prepare_neighbor_search(self):
-        """准备邻居搜索"""
+        """执行空间邻居搜索"""
         threads_per_block = 256
         blocks = (self.particle_num + threads_per_block - 1) // threads_per_block
         
-        # 1. 计算网格ID
-        self._compute_grid_ids_kernel[blocks, threads_per_block](
+        # 重置邻居统计
+        self.particle_neighbor_num.copy_to_device(np.zeros(self.particle_max_num, dtype=np.int32))
+        
+        # 执行空间搜索
+        self._spatial_neighbor_search[blocks, threads_per_block](
             self.particle_positions,
-            self.grid_ids,
-            self.grid_size,
-            self.grid_num,
-            self.particle_num
+            self.particle_neighbors,
+            self.particle_neighbor_num,
+            self.particle_num,
+            self.dh
         )
+
+    @staticmethod
+    @cuda.jit
+    def _spatial_neighbor_search(positions, neighbors, neighbor_num, particle_num, search_radius):
+        """全空间邻居搜索的CUDA kernel
         
-        # 2. 初始化网格计数器
-        grid_blocks = (self.grid_num_particles.size + threads_per_block - 1) // threads_per_block
-        self._fill_array_kernel[grid_blocks, threads_per_block](self.grid_num_particles, 0)
+        采用直接空间映射策略进行邻居搜索
+        """
+        idx = cuda.grid(1)
+        if idx >= particle_num:
+            return
+            
+        pos_i = positions[idx]
+        count = 0
         
-        # 3. 统计每个网格中的粒子数
-        self._count_particles_per_grid_kernel[blocks, threads_per_block](
-            self.grid_ids,
-            self.grid_num_particles,
-            self.particle_num
-        )
-        
-        # 4. 计算前缀和
-        prefix_sum = np.cumsum(self.grid_num_particles.copy_to_host())
-        self.grid_particle_ids = cuda.to_device(np.zeros_like(prefix_sum))  # 重置计数器
-        self.grid_num_particles = cuda.to_device(prefix_sum)
-        
-        # 5. 创建临时数组 - 只创建一次
-        temp_positions = cuda.device_array_like(self.particle_positions)
-        temp_velocities = cuda.device_array_like(self.particle_velocities)
-        temp_densities = cuda.device_array_like(self.particle_densities)
-        temp_masses = cuda.device_array_like(self.particle_masses)
-        temp_materials = cuda.device_array_like(self.particle_materials)
-        temp_object_ids = cuda.device_array_like(self.particle_object_ids)
-        temp_is_dynamic = cuda.device_array_like(self.particle_is_dynamic)
-        temp_pressures = cuda.device_array_like(self.particle_pressures)
-        temp_rest_densities = cuda.device_array_like(self.particle_rest_densities)
-        temp_rest_volumes = cuda.device_array_like(self.particle_rest_volumes)
-        temp_colors = cuda.device_array_like(self.particle_colors)
-        temp_rigid_original_positions = cuda.device_array_like(self.rigid_particle_original_positions)
-        
-        # 6. 第一步排序
-        self._sort_particles_step1_kernel[blocks, threads_per_block](
-            self.particle_positions, self.particle_velocities, self.particle_densities,
-            self.particle_masses, self.particle_materials, self.particle_object_ids,
-            self.particle_is_dynamic, self.particle_pressures, self.particle_rest_densities,
-            self.particle_rest_volumes, self.particle_colors, self.rigid_particle_original_positions,
-            self.grid_ids, self.grid_particle_ids, self.grid_num_particles,
-            temp_positions, temp_velocities, temp_densities,
-            temp_masses, temp_materials, temp_object_ids,
-            temp_is_dynamic, temp_pressures, temp_rest_densities,
-            temp_rest_volumes, temp_colors, temp_rigid_original_positions,
-            self.particle_num
-        )
-        
-        # 7. 第二步排序
-        self._sort_particles_step2_kernel[blocks, threads_per_block](
-            self.particle_positions, self.particle_velocities, self.particle_densities,
-            self.particle_masses, self.particle_materials, self.particle_object_ids,
-            self.particle_is_dynamic, self.particle_pressures, self.particle_rest_densities,
-            self.particle_rest_volumes, self.particle_colors, self.rigid_particle_original_positions,
-            temp_positions, temp_velocities, temp_densities,
-            temp_masses, temp_materials, temp_object_ids,
-            temp_is_dynamic, temp_pressures, temp_rest_densities,
-            temp_rest_volumes, temp_colors, temp_rigid_original_positions,
-            self.particle_num
-        )
-        
-        # 8. 同步确保数据复制完成
-        cuda.synchronize()
+        # 全空间遍历
+        for j in range(particle_num):
+            if j == idx:
+                continue
+                
+            # 计算空间距离
+            dist_sq = 0.0
+            for d in range(3):
+                diff = pos_i[d] - positions[j][d]
+                dist_sq += diff * diff
+                
+            # 基于搜索半径的空间映射
+            if dist_sq <= search_radius * search_radius and count < 500:
+                neighbors[idx, count] = j
+                count += 1
+                
+        neighbor_num[idx] = count
 
     def add_cube(self, object_id, start, end, material, velocity, density, is_dynamic, color):
         """添加立方体"""
@@ -387,22 +361,6 @@ class BaseContainer:
         self.particle_num += num_particles
         self.object_num += 1
 
-    def find_neighbors(self):
-        """执行邻居搜索"""
-        threads_per_block = 256
-        blocks = (self.particle_num + threads_per_block - 1) // threads_per_block
-        
-        self._find_neighbors_kernel[blocks, threads_per_block](
-            self.particle_positions,
-            self.grid_particle_ids,
-            self.grid_num_particles,
-            self.grid_num,
-            self.particle_neighbors,
-            self.particle_neighbor_num,
-            self.dh,
-            self.particle_num
-        )
-
     def get_particle_positions(self):
         """获取粒子位置"""
         return self.particle_positions.copy_to_host()[:self.particle_num]
@@ -487,35 +445,140 @@ class BaseContainer:
         self.object_num += 1
         self.fluid_object_num += 1
 
+    def _set_object_properties(self, obj_id, obj_data, offset=None):
+        """设置物体属性的辅助方法"""
+        # 设置基本属性
+        attrs = {
+            'velocity': obj_data["velocity"],
+            'density': obj_data["density"], 
+            'color': obj_data["color"]
+        }
+        
+        # 处理位置偏移
+        if offset is not None:
+            offset = np.array(obj_data["translation"])
+            attrs['start'] = np.array(obj_data["start"]) + offset
+            attrs['end'] = np.array(obj_data["end"]) + offset
+            
+        # 设置可见性
+        self.object_visibility[obj_id] = obj_data.get("visible", 1)
+        
+        # 设置材质和集合
+        self.object_materials[obj_id] = self.material_fluid
+        self.object_collection[obj_id] = obj_data
+        self.object_id_fluid_body.add(obj_id)
+        
+        return attrs
+    
+    def _set_fluid_mesh_properties(self, fluid):
+        """设置流体mesh属性"""
+        # 提取基础属性
+        attrs = {
+            'obj_id': fluid["objectId"],
+            'particle_num': fluid["particleNum"],
+            'voxelized_points': fluid["voxelizedPoints"],
+            'velocity': np.array(fluid["velocity"], dtype=np.float32),
+            'density': fluid["density"],
+            'color': np.array(fluid["color"], dtype=np.int32),
+        }
+        
+        # 设置可见性
+        self.object_visibility[attrs['obj_id']] = fluid.get("visible", 1)
+        
+        # 设置流体属性
+        self.object_id_fluid_body.add(attrs['obj_id'])
+        self.object_materials[attrs['obj_id']] = self.material_fluid
+        self.object_collection[attrs['obj_id']] = fluid
+        
+        return attrs
+
+    def _set_rigid_body_properties(self, rigid):
+        """设置刚体属性"""
+        attrs = {
+            'obj_id': rigid["objectId"],
+            'particle_num': rigid["particleNum"],
+            'positions': np.array(rigid["voxelizedPoints"], dtype=np.float32),
+            'density': rigid["density"],
+            'color': np.array(rigid["color"], dtype=np.int32),
+            'is_dynamic': rigid["isDynamic"],
+            'velocity': (np.array(rigid["velocity"], dtype=np.float32) 
+                        if rigid["isDynamic"] 
+                        else np.zeros(self.dim, dtype=np.float32))
+        }
+        
+        # 设置对象属性
+        self.object_visibility[attrs['obj_id']] = rigid.get("visible", 1)
+        self.object_materials[attrs['obj_id']] = self.material_rigid
+        self.object_collection[attrs['obj_id']] = rigid
+        self.object_id_rigid_body.add(attrs['obj_id'])
+        
+        return attrs
+    
+    def _update_rigid_body_arrays(self, obj_id, attrs):
+        """更新刚体数组"""
+        # 基础属性更新
+        arrays_basic = {
+            'rigid_body_is_dynamic': attrs['is_dynamic'],
+            'rigid_body_velocities': attrs['velocity'],
+            'rigid_body_particle_num': attrs['particle_num'],
+            'rigid_body_rotations': np.eye(self.dim, dtype=np.float32)
+        }
+        
+        # 复制和更新基础数组
+        for name, value in arrays_basic.items():
+            temp_array = getattr(self, name).copy_to_host()
+            temp_array[obj_id] = value
+            setattr(self, name, cuda.to_device(temp_array))
+        
+        # 处理动态刚体属性
+        if attrs['is_dynamic']:
+            mass = self.compute_rigid_mass(obj_id)
+            com = self.compute_rigid_com(obj_id)
+            
+            arrays_dynamic = {
+                'rigid_body_masses': mass,
+                'rigid_body_com': com,
+                'rigid_body_original_com': com.copy()
+            }
+            
+            # 复制和更新动态数组
+            for name, value in arrays_dynamic.items():
+                temp_array = getattr(self, name).copy_to_host()
+                temp_array[obj_id] = value
+                setattr(self, name, cuda.to_device(temp_array))
+        
+        return mass if attrs['is_dynamic'] else None
+
+    def _update_object_counters(self, fluid_count, rigid_count, rigid_body_count):
+        """更新对象计数器"""
+        counter_arrays = {
+            'fluid_object_num': fluid_count,
+            'rigid_object_num': rigid_count,
+            'object_num': fluid_count + rigid_count,
+        }
+        
+        for name, value in counter_arrays.items():
+            setattr(self, name, cuda.to_device(np.array([value], dtype=np.int32)))
+        
+        self.rigid_body_num = rigid_body_count
+
     def insert_object(self):
         """插入对象"""
         fluid_count = 0
         rigid_count = 0
         rigid_body_count = 0
         
-        #fluid block
+        # 流体
         for fluid in self.fluid_blocks:
             obj_id = fluid["objectId"]
-            if obj_id in self.present_object:
-                continue
-            if fluid["entryTime"] > self.total_time:
+            if obj_id in self.present_object or fluid["entryTime"] > self.total_time:
                 continue
             
-            offset = np.array(fluid["translation"])
-            start = np.array(fluid["start"]) + offset
-            end = np.array(fluid["end"]) + offset
-            velocity = fluid["velocity"]
-            density = fluid["density"]
-            color = fluid["color"]
-            self.object_id_fluid_body.add(obj_id)
-            
-            if "visible" in fluid:
-                self.object_visibility[obj_id] = fluid["visible"]
-            else:
-                self.object_visibility[obj_id] = 1
-            
-            self.object_materials[obj_id] = self.material_fluid
-            self.object_collection[obj_id] = fluid
+            attrs = self._set_object_properties(obj_id, fluid, offset=True)
+            start, end = attrs['start'], attrs['end']
+            velocity = attrs['velocity']
+            density = attrs['density'] 
+            color = attrs['color']
             
             self.add_cube(
                 object_id = obj_id,
@@ -531,138 +594,70 @@ class BaseContainer:
             fluid_count += 1
             self.present_object.append(obj_id)
         
-        #fluid body 
+        # 流体mesh
         for fluid in self.fluid_bodies:
-            obj_id = fluid["objectId"]
+            attrs = self._set_fluid_mesh_properties(fluid)
+            obj_id = attrs['obj_id']
+            
             if obj_id in self.present_object:
                 continue
             if fluid["entryTime"] > self.total_time:
                 continue
-            
-            particle_num = fluid["particleNum"]
-            voxelized_points_np = fluid["voxelizedPoints"]
-            velocity = np.array(fluid["velocity"], dtype=np.float32)
-            
-            density = fluid["density"]
-            color = np.array(fluid["color"], dtype=np.int32)
-            
-            if "visible" in fluid:
-                self.object_visibility[obj_id] = fluid["visible"]
-            else:
-                self.object_visibility[obj_id] = 1
-            
-            self.object_id_fluid_body.add(obj_id)
-            self.object_materials[obj_id] = self.material_fluid
-            self.object_collection[obj_id] = fluid
-            
+                
             self.add_particles(
                 obj_id,
-                particle_num,
-                np.array(voxelized_points_np, dtype=np.float32), # position
-                np.stack([velocity for _ in range(particle_num)]), # velocity
-                density * np.ones(particle_num, dtype=np.float32), # density
-                np.zeros(particle_num, dtype=np.float32), # pressure
-                np.array([self.material_fluid for _ in range(particle_num)], dtype=np.int32), 
-                1 * np.ones(particle_num, dtype=np.int32), # dynamic
-                np.stack([color for _ in range(particle_num)])
+                attrs['particle_num'],
+                attrs['voxelized_points'],
+                np.stack([attrs['velocity'] for _ in range(attrs['particle_num'])]),
+                attrs['density'] * np.ones(attrs['particle_num'], dtype=np.float32),
+                np.zeros(attrs['particle_num'], dtype=np.float32),
+                np.array([self.material_fluid for _ in range(attrs['particle_num'])], dtype=np.int32),
+                1 * np.ones(attrs['particle_num'], dtype=np.int32),
+                np.stack([attrs['color'] for _ in range(attrs['particle_num'])])
             )
             
             fluid_count += 1
             self.present_object.append(obj_id)
         
-        #rigid body
+        # 刚体
         for rigid in self.rigid_bodies:
-            obj_id = rigid["objectId"]
+            attrs = self._set_rigid_body_properties(rigid)
+            obj_id = attrs['obj_id']
+            
             if obj_id in self.present_object:
                 continue
             if rigid["entryTime"] > self.total_time:
                 continue
-            
-            self.object_id_rigid_body.add(obj_id)
-            particle_num = rigid["particleNum"]
-            voxelized_points_np = rigid["voxelizedPoints"]
-            positions = np.array(voxelized_points_np, dtype=np.float32)
-            
-            density = rigid["density"]
-            color = np.array(rigid["color"], dtype=np.int32)
-            is_dynamic = rigid["isDynamic"]
-            
-            if "visible" in rigid:
-                self.object_visibility[obj_id] = rigid["visible"]
-            else:
-                self.object_visibility[obj_id] = 1
-            
-            self.object_materials[obj_id] = self.material_rigid
-            self.object_collection[obj_id] = rigid
-            
-            if is_dynamic:
-                velocity = np.array(rigid["velocity"], dtype=np.float32)
-            else:
-                velocity = np.array([0.0 for _ in range(self.dim)], dtype=np.float32)
-            
+                
             # 保存原始位置
             start_idx = self.particle_num
-            end_idx = start_idx + particle_num
+            end_idx = start_idx + attrs['particle_num']
             temp_rigid_particle_original_positions = self.rigid_particle_original_positions.copy_to_host()
-            temp_rigid_particle_original_positions[start_idx:end_idx] = positions
+            temp_rigid_particle_original_positions[start_idx:end_idx] = attrs['positions']
             self.rigid_particle_original_positions = cuda.to_device(temp_rigid_particle_original_positions)
             
+            # 添加粒子
             self.add_particles(
                 obj_id,
-                particle_num,
-                positions,
-                np.stack([velocity for _ in range(particle_num)]),
-                density * np.ones(particle_num, dtype=np.float32),
-                np.zeros(particle_num, dtype=np.float32),
-                np.array([self.material_rigid for _ in range(particle_num)], dtype=np.int32), 
-                is_dynamic * np.ones(particle_num, dtype=np.int32),
-                np.stack([color for _ in range(particle_num)])
+                attrs['particle_num'],
+                attrs['positions'],
+                np.stack([attrs['velocity'] for _ in range(attrs['particle_num'])]),
+                attrs['density'] * np.ones(attrs['particle_num'], dtype=np.float32),
+                np.zeros(attrs['particle_num'], dtype=np.float32),
+                np.array([self.material_rigid for _ in range(attrs['particle_num'])], dtype=np.int32),
+                attrs['is_dynamic'] * np.ones(attrs['particle_num'], dtype=np.int32),
+                np.stack([attrs['color'] for _ in range(attrs['particle_num'])])
             )
             
             # 更新刚体属性
-            temp_rigid_body_is_dynamic = self.rigid_body_is_dynamic.copy_to_host()
-            temp_rigid_body_velocities = self.rigid_body_velocities.copy_to_host()
-            temp_rigid_body_particle_num = self.rigid_body_particle_num.copy_to_host()
-            temp_rigid_body_rotations = self.rigid_body_rotations.copy_to_host()
-            
-            temp_rigid_body_is_dynamic[obj_id] = is_dynamic
-            temp_rigid_body_velocities[obj_id] = velocity
-            temp_rigid_body_particle_num[obj_id] = particle_num
-            # 初始化为单位矩阵
-            temp_rigid_body_rotations[obj_id] = np.eye(self.dim, dtype=np.float32)
-            
-            self.rigid_body_is_dynamic = cuda.to_device(temp_rigid_body_is_dynamic)
-            self.rigid_body_velocities = cuda.to_device(temp_rigid_body_velocities)
-            self.rigid_body_particle_num = cuda.to_device(temp_rigid_body_particle_num)
-            self.rigid_body_rotations = cuda.to_device(temp_rigid_body_rotations)
-            
-            self.rigid_particle_num += particle_num
-        
-            if is_dynamic:
-                mass = self.compute_rigid_mass(obj_id)
-                com = self.compute_rigid_com(obj_id)
-                
-                temp_rigid_body_masses = self.rigid_body_masses.copy_to_host()
-                temp_rigid_body_com = self.rigid_body_com.copy_to_host()
-                temp_rigid_body_original_com = self.rigid_body_original_com.copy_to_host()
-                
-                temp_rigid_body_masses[obj_id] = mass
-                temp_rigid_body_com[obj_id] = com
-                temp_rigid_body_original_com[obj_id] = com.copy()  # 保存原始质心位置
-                
-                self.rigid_body_masses = cuda.to_device(temp_rigid_body_masses)
-                self.rigid_body_com = cuda.to_device(temp_rigid_body_com)
-                self.rigid_body_original_com = cuda.to_device(temp_rigid_body_original_com)
-            
+            self._update_rigid_body_arrays(obj_id, attrs)
+            self.rigid_particle_num += attrs['particle_num']
             rigid_count += 1
             rigid_body_count += 1
             self.present_object.append(obj_id)
         
         # 更新计数器a
-        self.fluid_object_num = cuda.to_device(np.array([fluid_count], dtype=np.int32))
-        self.rigid_object_num = cuda.to_device(np.array([rigid_count], dtype=np.int32))
-        self.object_num = cuda.to_device(np.array([fluid_count + rigid_count], dtype=np.int32))
-        self.rigid_body_num = rigid_body_count
+        self._update_object_counters(fluid_count, rigid_count, rigid_body_count)
 
     def dump(self, obj_id):
         """导出对象数据"""
@@ -738,202 +733,11 @@ class BaseContainer:
 
     @staticmethod
     @cuda.jit
-    def _compute_grid_ids_kernel(positions, grid_ids, grid_size, grid_num, particle_num):
-        """计算每个粒子所在的网格ID"""
-        idx = cuda.grid(1)
-        if idx >= particle_num:
-            return
-        
-        # 计算粒子所在的网格索引
-        cell_x = int(positions[idx, 0] / grid_size[0])
-        cell_y = int(positions[idx, 1] / grid_size[1])
-        cell_z = int(positions[idx, 2] / grid_size[2])
-        
-        # 确保在网格范围内
-        if cell_x < 0:
-            cell_x = 0
-        elif cell_x >= grid_num[0]:
-            cell_x = grid_num[0] - 1
-        
-        if cell_y < 0:
-            cell_y = 0
-        elif cell_y >= grid_num[1]:
-            cell_y = grid_num[1] - 1
-        
-        if cell_z < 0:
-            cell_z = 0
-        elif cell_z >= grid_num[2]:
-            cell_z = grid_num[2] - 1
-            
-        # 计算展平后的网格ID
-        grid_ids[idx] = cell_x + cell_y * grid_num[0] + cell_z * grid_num[0] * grid_num[1]
-
-    @staticmethod
-    @cuda.jit
-    def _count_particles_per_grid_kernel(grid_ids, grid_num_particles, particle_num):
-        """计算每个格子中的粒子数"""
-        idx = cuda.grid(1)
-        if idx >= particle_num:
-            return
-        
-        grid_id = grid_ids[idx]
-        cuda.atomic.add(grid_num_particles, grid_id, 1)
-
-    @staticmethod
-    @cuda.jit
-    def _sort_particles_step1_kernel(positions, velocities, densities, masses, materials, 
-                                   object_ids, is_dynamic, pressures, rest_densities, 
-                                   rest_volumes, colors, rigid_original_positions,
-                                   grid_ids, grid_particle_ids, grid_num_particles,
-                                   temp_positions, temp_velocities, temp_densities, 
-                                   temp_masses, temp_materials, temp_object_ids, 
-                                   temp_is_dynamic, temp_pressures, temp_rest_densities,
-                                   temp_rest_volumes, temp_colors, temp_rigid_original_positions,
-                                   particle_num):
-        """排序第一步：复制到临时数组"""
-        idx = cuda.grid(1)
-        if idx >= particle_num:
-            return
-        
-        grid_id = grid_ids[idx]
-        sorted_idx = grid_num_particles[grid_id - 1] if grid_id > 0 else 0
-        actual_idx = cuda.atomic.add(grid_particle_ids, sorted_idx, 1)
-        
-        # 复制所有粒子数据到临时数组
-        for i in range(3):
-            temp_positions[actual_idx, i] = positions[idx, i]
-            temp_velocities[actual_idx, i] = velocities[idx, i]
-            temp_colors[actual_idx, i] = colors[idx, i]
-            temp_rigid_original_positions[actual_idx, i] = rigid_original_positions[idx, i]
-        
-        temp_densities[actual_idx] = densities[idx]
-        temp_masses[actual_idx] = masses[idx]
-        temp_materials[actual_idx] = materials[idx]
-        temp_object_ids[actual_idx] = object_ids[idx]
-        temp_is_dynamic[actual_idx] = is_dynamic[idx]
-        temp_pressures[actual_idx] = pressures[idx]
-        temp_rest_densities[actual_idx] = rest_densities[idx]
-        temp_rest_volumes[actual_idx] = rest_volumes[idx]
-
-    @staticmethod
-    @cuda.jit
-    def _sort_particles_step2_kernel(positions, velocities, densities, masses, materials,
-                                   object_ids, is_dynamic, pressures, rest_densities,
-                                   rest_volumes, colors, rigid_original_positions,
-                                   temp_positions, temp_velocities, temp_densities,
-                                   temp_masses, temp_materials, temp_object_ids,
-                                   temp_is_dynamic, temp_pressures, temp_rest_densities,
-                                   temp_rest_volumes, temp_colors, temp_rigid_original_positions,
-                                   particle_num):
-        """排序第二步：从临时数组复制回原数组"""
-        idx = cuda.grid(1)
-        if idx >= particle_num:
-            return
-        
-        # 从临时数组复制所有数据回原数组
-        for i in range(3):
-            positions[idx, i] = temp_positions[idx, i]
-            velocities[idx, i] = temp_velocities[idx, i]
-            colors[idx, i] = temp_colors[idx, i]
-            rigid_original_positions[idx, i] = temp_rigid_original_positions[idx, i]
-        
-        densities[idx] = temp_densities[idx]
-        masses[idx] = temp_masses[idx]
-        materials[idx] = temp_materials[idx]
-        object_ids[idx] = temp_object_ids[idx]
-        is_dynamic[idx] = temp_is_dynamic[idx]
-        pressures[idx] = temp_pressures[idx]
-        rest_densities[idx] = temp_rest_densities[idx]
-        rest_volumes[idx] = temp_rest_volumes[idx]
-
-    @staticmethod
-    @cuda.jit
-    def _find_neighbors_kernel(positions, grid_ids, grid_num_particles, grid_num,
-                         particle_neighbors, particle_neighbor_num, h, particle_num):
-        """查找邻居粒子的CUDA kernel"""
-        idx = cuda.grid(1)
-        if idx >= particle_num:
-            return
-        
-        pos_i = positions[idx]
-        neighbor_count = 0
-        
-        # 获取网格位置
-        grid_idx = grid_ids[idx]
-        grid_pos = cuda.local.array(3, dtype=int32)
-        grid_pos[0] = grid_idx % grid_num[0]
-        grid_pos[1] = (grid_idx // grid_num[0]) % grid_num[1]
-        grid_pos[2] = grid_idx // (grid_num[0] * grid_num[1])
-        
-        # 遍历相邻网格
-        for i in range(-1, 2):
-            for j in range(-1, 2):
-                for k in range(-1, 2):
-                    nx = grid_pos[0] + i
-                    ny = grid_pos[1] + j
-                    nz = grid_pos[2] + k
-                    
-                    if (nx < 0 or nx >= grid_num[0] or
-                        ny < 0 or ny >= grid_num[1] or
-                        nz < 0 or nz >= grid_num[2]):
-                        continue
-                        
-                    neighbor_idx = nx + ny * grid_num[0] + nz * grid_num[0] * grid_num[1]
-                    start_idx = 0 if neighbor_idx == 0 else grid_num_particles[neighbor_idx - 1]
-                    end_idx = grid_num_particles[neighbor_idx]
-                    
-                    for p in range(start_idx, end_idx):
-                        if p == idx:
-                            continue
-                            
-                        r = cuda.local.array(3, dtype=float32)
-                        r_norm_sq = 0.0
-                        for d in range(3):
-                            r[d] = pos_i[d] - positions[p][d]
-                            r_norm_sq += r[d] * r[d]
-                        
-                        if r_norm_sq < h * h:
-                            if neighbor_count < 60:  # 最大邻居数限制
-                                particle_neighbors[idx, neighbor_count] = p
-                                neighbor_count += 1
-        
-        particle_neighbor_num[idx] = neighbor_count
-
-    @staticmethod
-    @cuda.jit
     def _fill_array_kernel(arr, value):
         """填充数组的CUDA kernel"""
         idx = cuda.grid(1)
         if idx < arr.size:
             arr[idx] = value
-
-@cuda.jit(device=True)
-def flatten_grid_index(grid_index, grid_num):
-    """将3D网格索引转换为1D索引"""
-    ret = 0
-    for i in range(3):
-        ret_p = grid_index[i]
-        for j in range(i+1, 3):
-            ret_p *= grid_num[j]
-        ret += ret_p
-    return ret
-
-@cuda.jit(device=True)
-def pos_to_index(pos, grid_size, grid_num, out_index):
-    """将位置转换为网格索引"""
-    for i in range(3):
-        out_index[i] = int(pos[i] / grid_size[i])
-        # 确保索引在有效范围内
-        if out_index[i] < 0:
-            out_index[i] = 0
-        if out_index[i] >= grid_num[i]:
-            out_index[i] = grid_num[i] - 1
-
-@cuda.jit(device=True)
-def get_flatten_grid_index(pos, grid_size, grid_num):
-    """获取位置对应的扁平化网格索引"""
-    grid_index = pos_to_index(pos, grid_size)
-    return flatten_grid_index(grid_index, grid_num)
 
 @cuda.jit(device=True)
 def add_particle_device(particle_positions, particle_velocities, particle_densities, 
@@ -942,20 +746,30 @@ def add_particle_device(particle_positions, particle_velocities, particle_densit
                        particle_object_ids, particle_is_dynamic, rigid_particle_original_positions,
                        p, obj_id, x, v, density, pressure, material, is_dynamic, color, V0):
     """设备函数：添加一个粒子"""
-    for d in range(3):
-        particle_positions[p, d] = x[d]
-        particle_velocities[p, d] = v[d]
-        rigid_particle_original_positions[p, d] = x[d]
-        particle_colors[p, d] = color[d]
+    # 向量属性(3D)
+    vector_props = {
+        'positions': (particle_positions, x),
+        'velocities': (particle_velocities, v),
+        'rigid_positions': (rigid_particle_original_positions, x),
+        'colors': (particle_colors, color)
+    }
+    for prop_name, (array, value) in vector_props.items():
+        for d in range(3):
+            array[p, d] = value[d]
     
-    particle_densities[p] = density
-    particle_pressures[p] = pressure
-    particle_rest_densities[p] = density
-    particle_rest_volumes[p] = V0
-    particle_masses[p] = V0 * density
-    particle_materials[p] = material
-    particle_object_ids[p] = obj_id
-    particle_is_dynamic[p] = is_dynamic
+    # 标量属性
+    scalar_props = {
+        'densities': (particle_densities, density),
+        'pressures': (particle_pressures, pressure),
+        'rest_densities': (particle_rest_densities, density),
+        'rest_volumes': (particle_rest_volumes, V0),
+        'masses': (particle_masses, V0 * density),
+        'materials': (particle_materials, material),
+        'object_ids': (particle_object_ids, obj_id),
+        'is_dynamic': (particle_is_dynamic, is_dynamic)
+    }
+    for prop_name, (array, value) in scalar_props.items():
+        array[p] = value
 
 @cuda.jit
 def add_particles_kernel(particle_positions, particle_velocities, particle_densities,
