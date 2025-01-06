@@ -99,9 +99,6 @@ class BaseSolver():
 
     @ti.kernel
     def compute_surface_tension_acceleration(self):
-        """
-        Compute the surface tension acceleration for each fluid particle.
-        """
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_fluid:
                 # Initialize acceleration vector
@@ -113,9 +110,6 @@ class BaseSolver():
 
     @ti.func
     def compute_surface_tension_acceleration_task(self, p_i, p_j, a_i: ti.template()):
-        """
-        Compute the surface tension acceleration contribution from neighboring particles.
-        """
         pos_i = self.container.particle_positions[p_i]
         if self.container.particle_materials[p_j] == self.container.material_fluid:
             # Fluid neighbors
@@ -136,18 +130,12 @@ class BaseSolver():
         """
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_fluid:
-                # Initialize acceleration vector
                 a_i = ti.Vector([0.0 for _ in range(self.container.dim)])
-                # Iterate over all neighbors to compute the viscosity acceleration
                 self.container.for_all_neighbors(p_i, self.compute_viscosity_acceleration_task, a_i)
-                # Add computed acceleration to the particle's acceleration
                 self.container.particle_accelerations[p_i] += (a_i / self.container.particle_rest_densities[p_i])
 
     @ti.func
     def compute_viscosity_acceleration_task(self, p_i, p_j, a_i: ti.template()):
-        """
-        Compute the viscosity acceleration contribution from neighboring particles.
-        """
         pos_i = self.container.particle_positions[p_i]
         pos_j = self.container.particle_positions[p_j]
         R = pos_i - pos_j
@@ -155,24 +143,14 @@ class BaseSolver():
         v_xy = ti.math.dot(self.container.particle_velocities[p_i] - self.container.particle_velocities[p_j], R)
 
         if self.container.particle_materials[p_j] == self.container.material_fluid:
-            # Compute the viscosity acceleration for fluid neighbors
-            a_i += (
-                2 * (self.container.dim + 2) * self.viscosity * (self.container.particle_masses[p_i] + self.container.particle_masses[p_j]) / 2
-                / self.container.particle_densities[p_j]
-                / (R.norm()**2 + 0.01 * self.container.dh**2)
-                * v_xy
-                * nabla_ij
-            )
+            avg_mass = (self.container.particle_masses[p_i] + self.container.particle_masses[p_j])/2
+            regular_viscosity = self.viscosity / self.container.particle_densities[p_j]
+            a_i +=  2 * (self.container.dim + 2) * regular_viscosity * avg_mass * v_xy * nabla_ij / (R.norm()**2 + 0.01 * self.container.dh**2)
 
         elif self.container.particle_materials[p_j] == self.container.material_rigid:
-            # Compute the viscosity acceleration for rigid neighbors
-            acc = (
-                2 * (self.container.dim + 2) * self.viscosity_b * (self.density_0 * self.container.particle_rest_volumes[p_j])
-                / self.container.particle_densities[p_i]
-                / (R.norm()**2 + 0.01 * self.container.dh**2)
-                * v_xy
-                * nabla_ij
-            )
+            rigid_mass = self.density_0 * self.container.particle_rest_volumes[p_j]
+            regular_viscosity_b = self.viscosity_b / self.container.particle_densities[p_i]
+            acc = 2 * (self.container.dim + 2) * regular_viscosity_b * rigid_mass * v_xy * nabla_ij / (R.norm()**2 + 0.01 * self.container.dh**2)
 
             a_i += acc
 
@@ -237,41 +215,85 @@ class BaseSolver():
 
     @ti.kernel
     def update_fluid_velocity(self):
-        """
-        Update velocity for each fluid particle based on its acceleration.
-        """
+        """更新流体粒子速度"""
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_fluid:
-                # Update velocity using the acceleration and time step
-                self.container.particle_velocities[p_i] += self.dt[None] * self.container.particle_accelerations[p_i]
+            self._process_velocity_update(p_i)
+                
+    @ti.func
+    def _process_velocity_update(self, p_i: int):
+        if self._is_fluid_particle(p_i):
+            self._apply_acceleration(p_i)
+            
+    @ti.func
+    def _apply_acceleration(self, idx: int):
+        acc = self.container.particle_accelerations[idx]
+        vel = self.container.particle_velocities[idx]
+        self.container.particle_velocities[idx] = vel + self.dt[None] * acc
 
     @ti.kernel
     def update_fluid_position(self):
-        """
-        Update position for each fluid particle based on its velocity.
-        """
+        """更新流体粒子位置"""
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_fluid:
-                # Update position using the velocity and time step
-                self.container.particle_positions[p_i] += self.dt[None] * self.container.particle_velocities[p_i]
-            elif self.container.particle_positions[p_i][1] > self.g_upper:
-                # Handle the emitter part
-                obj_id = self.container.particle_object_ids[p_i]
-                if self.container.object_materials[obj_id] == self.container.material_fluid:
-                    self.container.particle_positions[p_i] += self.dt[None] * self.container.particle_velocities[p_i]
-                    if self.container.particle_positions[p_i][1] <= self.g_upper:
-                        self.container.particle_materials[p_i] = self.container.material_fluid
-        
+            self._handle_position_update(p_i)
+            
+    @ti.func
+    def _handle_position_update(self, p_i: int):
+        pos = self.container.particle_positions[p_i]
+        if self._is_fluid_particle(p_i):
+            self._update_fluid_pos(p_i)
+        elif pos[1] > self.g_upper:
+            self._handle_emitter_particle(p_i)
+            
+    @ti.func
+    def _update_fluid_pos(self, idx: int):
+        vel = self.container.particle_velocities[idx]
+        pos = self.container.particle_positions[idx]
+        self.container.particle_positions[idx] = pos + self.dt[None] * vel
+            
+    @ti.func
+    def _handle_emitter_particle(self, p_i: int):
+        obj_id = self.container.particle_object_ids[p_i]
+        if self.container.object_materials[obj_id] == self.container.material_fluid:
+            self._process_emitter_movement(p_i)
+            
+    @ti.func
+    def _process_emitter_movement(self, idx: int):
+        pos = self.container.particle_positions[idx]
+        vel = self.container.particle_velocities[idx]
+        new_pos = pos + self.dt[None] * vel
+        self.container.particle_positions[idx] = new_pos
+        if new_pos[1] <= self.g_upper:
+            self.container.particle_materials[idx] = self.container.material_fluid
+
     @ti.kernel
     def prepare_emitter(self):
+        """准备发射器粒子"""
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_fluid:
-                if self.container.particle_positions[p_i][1] > self.g_upper:
-                    self.container.particle_materials[p_i] = self.container.material_rigid
+            self._check_and_convert_particle(p_i)
+            
+    @ti.func
+    def _check_and_convert_particle(self, idx: int):
+        if self._should_convert_to_rigid(idx):
+            self.container.particle_materials[idx] = self.container.material_rigid
+            
+    @ti.func
+    def _should_convert_to_rigid(self, idx: int) -> ti.i32:
+        pos = self.container.particle_positions[idx]
+        return self._is_fluid_particle(idx) and pos[1] > self.g_upper
+            
+    @ti.func
+    def _is_fluid_particle(self, idx: int) -> ti.i32:
+        return self.container.particle_materials[idx] == self.container.material_fluid
 
     @ti.kernel
     def init_object_id(self):
-        self.container.particle_object_ids.fill(-1)
+        """初始化对象ID"""
+        self._reset_particle_ids()
+        
+    @ti.func
+    def _reset_particle_ids(self):
+        for i in range(self.container.particle_num[None]):
+            self.container.particle_object_ids[i] = -1
 
     def prepare(self):
         print("initializing object id")
