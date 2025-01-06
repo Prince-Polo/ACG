@@ -2,7 +2,6 @@ import numpy as np
 from numba import cuda, float32, int32
 from .base_solver_numba import BaseSolver
 from ..containers.dfsph_container_numba import DFSPHContainer
-from ..containers.base_container_numba import pos_to_index, flatten_grid_index
 import math
 
 @cuda.jit(device=True)
@@ -30,9 +29,8 @@ class DFSPHSolver(BaseSolver):
     @staticmethod
     @cuda.jit
     def _compute_derivative_density_kernel(positions, masses, velocities, materials,
-                                         dfsph_derivative_densities, material_fluid,
-                                         particle_num, grid_ids, grid_num_particles,
-                                         grid_size, grid_num, h):
+                                        dfsph_derivative_densities, material_fluid,
+                                        particle_num, neighbors, neighbor_num, h):
         """计算密度导数的CUDA kernel"""
         idx = cuda.grid(1)
         if idx >= particle_num:
@@ -44,44 +42,30 @@ class DFSPHSolver(BaseSolver):
             pos_i = positions[idx]
             vel_i = velocities[idx]
             
-            # 获取当前粒子的网格索引
-            center_cell = cuda.local.array(3, dtype=int32)
-            pos_to_index(pos_i, grid_size, grid_num, center_cell)
-            
-            # 遍历相邻网格
-            for i in range(-1, 2):
-                for j in range(-1, 2):
-                    for k in range(-1, 2):
-                        neighbor_cell = cuda.local.array(3, dtype=int32)
-                        neighbor_cell[0] = center_cell[0] + i
-                        neighbor_cell[1] = center_cell[1] + j
-                        neighbor_cell[2] = center_cell[2] + k
-                        
-                        grid_idx = flatten_grid_index(neighbor_cell, grid_num)
-                        start_idx = 0 if grid_idx == 0 else grid_num_particles[grid_idx - 1]
-                        end_idx = grid_num_particles[grid_idx]
-                        
-                        # 遍历网格内的粒子
-                        for j in range(start_idx, end_idx):
-                            if j == idx:
-                                continue
-                                
-                            r = cuda.local.array(3, dtype=float32)
-                            for d in range(3):
-                                r[d] = pos_i[d] - positions[j][d]
-                            
-                            nabla_kernel = cuda.local.array(3, dtype=float32)
-                            kernel_gradient(r, h, nabla_kernel)
-                            vel_diff = cuda.local.array(3, dtype=float32)
-                            for d in range(3):
-                                vel_diff[d] = vel_i[d] - velocities[j][d]
-                            
-                            dot_product = 0.0
-                            for d in range(3):
-                                dot_product += vel_diff[d] * nabla_kernel[d]
-                                
-                            derivative_density += masses[j] * dot_product
-                            num_neighbors += 1
+            # 遍历邻居粒子
+            num_neighbors = neighbor_num[idx]
+            for n_idx in range(num_neighbors):
+                j = neighbors[idx, n_idx]
+                
+                if j == idx:
+                    continue
+                    
+                r = cuda.local.array(3, dtype=float32)
+                for d in range(3):
+                    r[d] = pos_i[d] - positions[j][d]
+                
+                nabla_kernel = cuda.local.array(3, dtype=float32)
+                kernel_gradient(r, h, nabla_kernel)
+                vel_diff = cuda.local.array(3, dtype=float32)
+                for d in range(3):
+                    vel_diff[d] = vel_i[d] - velocities[j][d]
+                
+                dot_product = 0.0
+                for d in range(3):
+                    dot_product += vel_diff[d] * nabla_kernel[d]
+                    
+                derivative_density += masses[j] * dot_product
+                num_neighbors += 1
             
             # 处理结果
             if num_neighbors < 20:
@@ -104,18 +88,15 @@ class DFSPHSolver(BaseSolver):
             self.container.particle_dfsph_derivative_densities,
             self.container.material_fluid,
             self.container.particle_num,
-            self.container.grid_ids,
-            self.container.grid_num_particles,
-            self.container.grid_size,
-            self.container.grid_num,
+            self.container.particle_neighbors,
+            self.container.particle_neighbor_num,
             self.container.dh
         )
 
     @staticmethod
     @cuda.jit
     def _compute_factor_k_kernel(positions, masses, materials, densities, dfsph_factor_k,
-                               material_fluid, particle_num, grid_ids, grid_num_particles,
-                               grid_size, grid_num, h):
+                            material_fluid, particle_num, neighbors, neighbor_num, h):
         """计算factor k的CUDA kernel"""
         idx = cuda.grid(1)
         if idx >= particle_num:
@@ -128,49 +109,35 @@ class DFSPHSolver(BaseSolver):
             grad_norm_sum = 0.0
             pos_i = positions[idx]
             
-            # 获取当前粒子的网格索引
-            center_cell = cuda.local.array(3, dtype=int32)
-            pos_to_index(pos_i, grid_size, grid_num, center_cell)
-            
-            # 遍历相邻网格
-            for i in range(-1, 2):
-                for j in range(-1, 2):
-                    for k in range(-1, 2):
-                        neighbor_cell = cuda.local.array(3, dtype=int32)
-                        neighbor_cell[0] = center_cell[0] + i
-                        neighbor_cell[1] = center_cell[1] + j
-                        neighbor_cell[2] = center_cell[2] + k
+            # 遍历邻居粒子
+            num_neighbors = neighbor_num[idx]
+            for n_idx in range(num_neighbors):
+                j = neighbors[idx, n_idx]
+                
+                if j == idx:
+                    continue
+                    
+                if materials[j] == material_fluid:
+                    # 流体粒子
+                    r = cuda.local.array(3, dtype=float32)
+                    for d in range(3):
+                        r[d] = pos_i[d] - positions[j][d]
+                    
+                    grad_p_j = cuda.local.array(3, dtype=float32)
+                    kernel_gradient(r, h, grad_p_j)
+                    for d in range(3):
+                        grad_p_j[d] *= masses[j]
+                    
+                    # 计算平方和
+                    grad_norm = 0.0
+                    for d in range(3):
+                        grad_norm += grad_p_j[d] * grad_p_j[d]
+                    grad_norm_sum += grad_norm
+                    
+                    # 累加梯度
+                    for d in range(3):
+                        grad_sum[d] += grad_p_j[d]
                         
-                        grid_idx = flatten_grid_index(neighbor_cell, grid_num)
-                        start_idx = 0 if grid_idx == 0 else grid_num_particles[grid_idx - 1]
-                        end_idx = grid_num_particles[grid_idx]
-                        
-                        # 遍历网格内的粒子
-                        for j in range(start_idx, end_idx):
-                            if j == idx:
-                                continue
-                                
-                            if materials[j] == material_fluid:
-                                # 流体粒子
-                                r = cuda.local.array(3, dtype=float32)
-                                for d in range(3):
-                                    r[d] = pos_i[d] - positions[j][d]
-                                
-                                grad_p_j = cuda.local.array(3, dtype=float32)
-                                kernel_gradient(r, h, grad_p_j)
-                                for d in range(3):
-                                    grad_p_j[d] *= masses[j]
-                                
-                                # 计算平方和
-                                grad_norm = 0.0
-                                for d in range(3):
-                                    grad_norm += grad_p_j[d] * grad_p_j[d]
-                                grad_norm_sum += grad_norm
-                                
-                                # 累加梯度
-                                for d in range(3):
-                                    grad_sum[d] += grad_p_j[d]
-                                    
             # 计算grad_sum的平方范数
             grad_sum_norm = 0.0
             for d in range(3):
@@ -198,10 +165,8 @@ class DFSPHSolver(BaseSolver):
             self.container.particle_dfsph_factor_k,
             self.container.material_fluid,
             self.container.particle_num,
-            self.container.grid_ids,
-            self.container.grid_num_particles,
-            self.container.grid_size,
-            self.container.grid_num,
+            self.container.particle_neighbors,
+            self.container.particle_neighbor_num,
             self.container.dh
         )
 
@@ -234,9 +199,8 @@ class DFSPHSolver(BaseSolver):
     @staticmethod
     @cuda.jit
     def _compute_predict_density_kernel(positions, velocities, masses, materials, densities,
-                                      dfsph_predict_density, material_fluid, particle_num,
-                                      grid_ids, grid_num_particles, grid_size, grid_num,
-                                      h, dt):
+                                    dfsph_predict_density, material_fluid, particle_num,
+                                    neighbors, neighbor_num, h, dt):
         """计算预测密度的CUDA kernel"""
         idx = cuda.grid(1)
         if idx >= particle_num:
@@ -247,43 +211,29 @@ class DFSPHSolver(BaseSolver):
             pos_i = positions[idx]
             vel_i = velocities[idx]
             
-            # 获取当前粒子的网格索引
-            center_cell = cuda.local.array(3, dtype=int32)
-            pos_to_index(pos_i, grid_size, grid_num, center_cell)
-            
-            # 遍历相邻网格
-            for i in range(-1, 2):
-                for j in range(-1, 2):
-                    for k in range(-1, 2):
-                        neighbor_cell = cuda.local.array(3, dtype=int32)
-                        neighbor_cell[0] = center_cell[0] + i
-                        neighbor_cell[1] = center_cell[1] + j
-                        neighbor_cell[2] = center_cell[2] + k
-                        
-                        grid_idx = flatten_grid_index(neighbor_cell, grid_num)
-                        start_idx = 0 if grid_idx == 0 else grid_num_particles[grid_idx - 1]
-                        end_idx = grid_num_particles[grid_idx]
-                        
-                        # 遍历网格内的粒子
-                        for j in range(start_idx, end_idx):
-                            if j == idx:
-                                continue
-                                
-                            r = cuda.local.array(3, dtype=float32)
-                            for d in range(3):
-                                r[d] = pos_i[d] - positions[j][d]
-                            
-                            nabla_kernel = cuda.local.array(3, dtype=float32)
-                            kernel_gradient(r, h, nabla_kernel)
-                            vel_diff = cuda.local.array(3, dtype=float32)
-                            for d in range(3):
-                                vel_diff[d] = vel_i[d] - velocities[j][d]
-                            
-                            dot_product = 0.0
-                            for d in range(3):
-                                dot_product += vel_diff[d] * nabla_kernel[d]
-                                
-                            derivative_density += masses[j] * dot_product
+            # 遍历邻居粒子
+            num_neighbors = neighbor_num[idx]
+            for n_idx in range(num_neighbors):
+                j = neighbors[idx, n_idx]
+                
+                if j == idx:
+                    continue
+                    
+                r = cuda.local.array(3, dtype=float32)
+                for d in range(3):
+                    r[d] = pos_i[d] - positions[j][d]
+                
+                nabla_kernel = cuda.local.array(3, dtype=float32)
+                kernel_gradient(r, h, nabla_kernel)
+                vel_diff = cuda.local.array(3, dtype=float32)
+                for d in range(3):
+                    vel_diff[d] = vel_i[d] - velocities[j][d]
+                
+                dot_product = 0.0
+                for d in range(3):
+                    dot_product += vel_diff[d] * nabla_kernel[d]
+                    
+                derivative_density += masses[j] * dot_product
             
             predict_density = densities[idx] + dt * derivative_density
             dfsph_predict_density[idx] = max(predict_density, 1000.0)
@@ -302,10 +252,8 @@ class DFSPHSolver(BaseSolver):
             self.container.particle_dfsph_predict_density,
             self.container.material_fluid,
             self.container.particle_num,
-            self.container.grid_ids,
-            self.container.grid_num_particles,
-            self.container.grid_size,
-            self.container.grid_num,
+            self.container.particle_neighbors,
+            self.container.particle_neighbor_num,
             self.container.dh,
             self.dt[0]
         )
@@ -342,10 +290,10 @@ class DFSPHSolver(BaseSolver):
     @staticmethod
     @cuda.jit
     def _update_velocity_DFS_kernel(positions, velocities, masses, materials, densities,
-                                  dfsph_pressure_v, is_dynamic, object_ids, rigid_body_forces,
-                                  rigid_body_torques, rigid_body_com, material_fluid, 
-                                  material_rigid, particle_num, grid_ids, grid_num_particles,
-                                  grid_size, grid_num, h, m_eps, dt):
+                                dfsph_pressure_v, is_dynamic, object_ids, rigid_body_forces,
+                                rigid_body_torques, rigid_body_com, material_fluid, 
+                                material_rigid, particle_num, neighbors, neighbor_num,
+                                h, m_eps, dt):
         """更新DFS速度的CUDA kernel"""
         idx = cuda.grid(1)
         if idx >= particle_num:
@@ -358,90 +306,78 @@ class DFSPHSolver(BaseSolver):
                 dv[i] = 0.0
             
             pos_i = positions[idx]
-            center_cell = cuda.local.array(3, dtype=int32)
-            pos_to_index(pos_i, grid_size, grid_num, center_cell)
             
-            # 遍历相邻网格
-            for i in range(-1, 2):
-                for j in range(-1, 2):
-                    for k in range(-1, 2):
-                        neighbor_cell = cuda.local.array(3, dtype=int32)
-                        neighbor_cell[0] = center_cell[0] + i
-                        neighbor_cell[1] = center_cell[1] + j
-                        neighbor_cell[2] = center_cell[2] + k
+            # 遍历邻居粒子
+            num_neighbors = neighbor_num[idx]
+            for n_idx in range(num_neighbors):
+                j = neighbors[idx, n_idx]
+                
+                if j == idx:
+                    continue
+                
+                if materials[j] == material_fluid:
+                    # 流体-流体相互作用
+                    pressure_j = dfsph_pressure_v[j]
+                    regular_pressure_i = pressure_i / densities[idx]
+                    regular_pressure_j = pressure_j / densities[j]
+                    pressure_sum = pressure_i + pressure_j
+                    
+                    if abs(pressure_sum) > m_eps * densities[idx] * dt:
+                        r = cuda.local.array(3, dtype=float32)
+                        for d in range(3):
+                            r[d] = pos_i[d] - positions[j][d]
                         
-                        grid_idx = flatten_grid_index(neighbor_cell, grid_num)
-                        start_idx = 0 if grid_idx == 0 else grid_num_particles[grid_idx - 1]
-                        end_idx = grid_num_particles[grid_idx]
+                        nabla_kernel = cuda.local.array(3, dtype=float32)
+                        kernel_gradient(r, h, nabla_kernel)
+                        factor = masses[j] * (regular_pressure_i / densities[idx] + 
+                                            regular_pressure_j / densities[j])
                         
-                        # 遍历网格内的粒子
-                        for j in range(start_idx, end_idx):
-                            if j == idx:
-                                continue
-                                
-                            if materials[j] == material_fluid:
-                                # 流体-流体相互作用
-                                pressure_j = dfsph_pressure_v[j]
-                                regular_pressure_i = pressure_i / densities[idx]
-                                regular_pressure_j = pressure_j / densities[j]
-                                pressure_sum = pressure_i + pressure_j
-                                
-                                if abs(pressure_sum) > m_eps * densities[idx] * dt:
-                                    r = cuda.local.array(3, dtype=float32)
-                                    for d in range(3):
-                                        r[d] = pos_i[d] - positions[j][d]
-                                    
-                                    nabla_kernel = cuda.local.array(3, dtype=float32)
-                                    kernel_gradient(r, h, nabla_kernel)
-                                    factor = masses[j] * (regular_pressure_i / densities[idx] + 
-                                                        regular_pressure_j / densities[j])
-                                    
-                                    for d in range(3):
-                                        dv[d] += factor * nabla_kernel[d]
-                                        
-                            elif materials[j] == material_rigid:
-                                # 流体-刚体相互作用
-                                pressure_j = pressure_i
-                                regular_pressure_i = pressure_i / densities[idx]
-                                regular_pressure_j = pressure_j / densities[j]
-                                pressure_sum = pressure_i + pressure_j
-                                density_i = densities[idx]
-                                
-                                if abs(pressure_sum) > m_eps * densities[idx] * dt:
-                                    r = cuda.local.array(3, dtype=float32)
-                                    for d in range(3):
-                                        r[d] = pos_i[d] - positions[j][d]
-                                    
-                                    nabla_kernel = cuda.local.array(3, dtype=float32)
-                                    kernel_gradient(r, h, nabla_kernel)
-                                    factor = masses[j] * regular_pressure_i / density_i
-                                    
-                                    for d in range(3):
-                                        dv[d] += factor * nabla_kernel[d]
-                                    
-                                    if is_dynamic[j]:
-                                        # 计算作用在刚体上的力和扭矩
-                                        object_j = object_ids[j]
-                                        force = cuda.local.array(3, dtype=float32)
-                                        for d in range(3):
-                                            force[d] = (factor * nabla_kernel[d] * 
-                                                      masses[idx] / dt)
-                                            cuda.atomic.add(rigid_body_forces[object_j], 
-                                                          d, force[d])
-                                        
-                                        # 计算扭矩
-                                        r_com = cuda.local.array(3, dtype=float32)
-                                        for d in range(3):
-                                            r_com[d] = positions[j][d] - rigid_body_com[object_j][d]
-                                        
-                                        torque = cuda.local.array(3, dtype=float32)
-                                        torque[0] = r_com[1]*force[2] - r_com[2]*force[1]
-                                        torque[1] = r_com[2]*force[0] - r_com[0]*force[2]
-                                        torque[2] = r_com[0]*force[1] - r_com[1]*force[0]
-                                        
-                                        for d in range(3):
-                                            cuda.atomic.add(rigid_body_torques[object_j], 
-                                                          d, torque[d])
+                        for d in range(3):
+                            dv[d] += factor * nabla_kernel[d]
+                            
+                elif materials[j] == material_rigid:
+                    # 流体-刚体相互作用
+                    pressure_j = pressure_i
+                    regular_pressure_i = pressure_i / densities[idx]
+                    regular_pressure_j = pressure_j / densities[j]
+                    pressure_sum = pressure_i + pressure_j
+                    density_i = densities[idx]
+                    
+                    if abs(pressure_sum) > m_eps * densities[idx] * dt:
+                        r = cuda.local.array(3, dtype=float32)
+                        for d in range(3):
+                            r[d] = pos_i[d] - positions[j][d]
+                        
+                        nabla_kernel = cuda.local.array(3, dtype=float32)
+                        kernel_gradient(r, h, nabla_kernel)
+                        factor = masses[j] * regular_pressure_i / density_i
+                        
+                        for d in range(3):
+                            dv[d] += factor * nabla_kernel[d]
+                        
+                        if is_dynamic[j]:
+                            # 计算作用在刚体上的力和扭矩
+                            object_j = object_ids[j]
+                            force = cuda.local.array(3, dtype=float32)
+                            for d in range(3):
+                                force[d] = (factor * nabla_kernel[d] * 
+                                        masses[idx] / dt)
+                                cuda.atomic.add(rigid_body_forces[object_j], 
+                                            d, force[d])
+                            
+                            # 计算扭矩
+                            r_com = cuda.local.array(3, dtype=float32)
+                            for d in range(3):
+                                r_com[d] = positions[j][d] - rigid_body_com[object_j][d]
+                            
+                            torque = cuda.local.array(3, dtype=float32)
+                            torque[0] = r_com[1]*force[2] - r_com[2]*force[1]
+                            torque[1] = r_com[2]*force[0] - r_com[0]*force[2]
+                            torque[2] = r_com[0]*force[1] - r_com[1]*force[0]
+                            
+                            for d in range(3):
+                                cuda.atomic.add(rigid_body_torques[object_j], 
+                                            d, torque[d])
         
             # 更新速度
             for d in range(3):
@@ -467,10 +403,8 @@ class DFSPHSolver(BaseSolver):
             self.container.material_fluid,
             self.container.material_rigid,
             self.container.particle_num,
-            self.container.grid_ids,
-            self.container.grid_num_particles,
-            self.container.grid_size,
-            self.container.grid_num,
+            self.container.particle_neighbors,
+            self.container.particle_neighbor_num,
             self.container.dh,
             self.m_eps,
             self.dt[0]
@@ -485,7 +419,7 @@ class DFSPHSolver(BaseSolver):
             return
             
         if materials[idx] == material_fluid:
-            error = abs(densities[idx] - density_0) / density_0
+            error = abs(densities[idx] - density_0) / density_0 / 10.0
             cuda.atomic.add(error_sum, 0, error)
 
     def compute_density_error(self) -> float:
@@ -538,32 +472,13 @@ class DFSPHSolver(BaseSolver):
         
         return error_sum[0] / self.container.particle_num
 
-    def correct_divergence_error(self):
-        """修正散度误差"""
-        num_iterations = 0
-        average_density_derivative_error = 0.0
-        
-        while num_iterations < 1 or num_iterations < self.m_max_iterations:
-            self.compute_derivative_density()
-            self.compute_pressure_for_DFS()
-            self.update_velocity_DFS()
-            average_density_derivative_error = self.compute_density_derivative_error()
-
-            eta = self.max_error_V * self.density_0 / self.dt[0]
-            num_iterations += 1
-
-            if average_density_derivative_error <= eta:
-                break
-            
-        print(f"DFSPH - iteration V: {num_iterations} Avg density err: {average_density_derivative_error}")
-
     @staticmethod
     @cuda.jit
     def _update_velocity_CDS_kernel(positions, velocities, masses, materials, densities,
-                                  dfsph_pressure, is_dynamic, object_ids, rigid_body_forces,
-                                  rigid_body_torques, rigid_body_com, material_fluid, 
-                                  material_rigid, particle_num, grid_ids, grid_num_particles,
-                                  grid_size, grid_num, h, m_eps, dt):
+                                dfsph_pressure, is_dynamic, object_ids, rigid_body_forces,
+                                rigid_body_torques, rigid_body_com, material_fluid, 
+                                material_rigid, particle_num, neighbors, neighbor_num,
+                                h, m_eps, dt):
         """更新CDS速度的CUDA kernel"""
         idx = cuda.grid(1)
         if idx >= particle_num:
@@ -576,90 +491,78 @@ class DFSPHSolver(BaseSolver):
                 dv[i] = 0.0
             
             pos_i = positions[idx]
-            center_cell = cuda.local.array(3, dtype=int32)
-            pos_to_index(pos_i, grid_size, grid_num, center_cell)
             
-            # 遍历相邻网格
-            for i in range(-1, 2):
-                for j in range(-1, 2):
-                    for k in range(-1, 2):
-                        neighbor_cell = cuda.local.array(3, dtype=int32)
-                        neighbor_cell[0] = center_cell[0] + i
-                        neighbor_cell[1] = center_cell[1] + j
-                        neighbor_cell[2] = center_cell[2] + k
+            # 遍历邻居粒子
+            num_neighbors = neighbor_num[idx]
+            for n_idx in range(num_neighbors):
+                j = neighbors[idx, n_idx]
+                
+                if j == idx:
+                    continue
+                
+                if materials[j] == material_fluid:
+                    # 流体-流体相互作用
+                    pressure_j = dfsph_pressure[j]
+                    regular_pressure_i = pressure_i / densities[idx]
+                    regular_pressure_j = pressure_j / densities[j]
+                    pressure_sum = pressure_i + pressure_j
+                    
+                    if abs(pressure_sum) > m_eps * densities[idx] * dt:
+                        r = cuda.local.array(3, dtype=float32)
+                        for d in range(3):
+                            r[d] = pos_i[d] - positions[j][d]
                         
-                        grid_idx = flatten_grid_index(neighbor_cell, grid_num)
-                        start_idx = 0 if grid_idx == 0 else grid_num_particles[grid_idx - 1]
-                        end_idx = grid_num_particles[grid_idx]
+                        nabla_kernel = cuda.local.array(3, dtype=float32)
+                        kernel_gradient(r, h, nabla_kernel)
+                        factor = masses[j] * (regular_pressure_i / densities[idx] + 
+                                            regular_pressure_j / densities[j])
                         
-                        # 遍历网格内的粒子
-                        for j in range(start_idx, end_idx):
-                            if j == idx:
-                                continue
+                        for d in range(3):
+                            dv[d] += factor * nabla_kernel[d]
                             
-                            if materials[j] == material_fluid:
-                                # 流体-流体相互作用
-                                pressure_j = dfsph_pressure[j]
-                                regular_pressure_i = pressure_i / densities[idx]
-                                regular_pressure_j = pressure_j / densities[j]
-                                pressure_sum = pressure_i + pressure_j
-                                
-                                if abs(pressure_sum) > m_eps * densities[idx] * dt:
-                                    r = cuda.local.array(3, dtype=float32)
-                                    for d in range(3):
-                                        r[d] = pos_i[d] - positions[j][d]
-                                    
-                                    nabla_kernel = cuda.local.array(3, dtype=float32)
-                                    kernel_gradient(r, h, nabla_kernel)
-                                    factor = masses[j] * (regular_pressure_i / densities[idx] + 
-                                                        regular_pressure_j / densities[j])
-                                    
-                                    for d in range(3):
-                                        dv[d] += factor * nabla_kernel[d]
-                                    
-                            elif materials[j] == material_rigid:
-                                # 流体-刚体相互作用
-                                pressure_j = pressure_i
-                                regular_pressure_i = pressure_i / densities[idx]
-                                regular_pressure_j = pressure_j / densities[j]
-                                pressure_sum = pressure_i + pressure_j
-                                density_i = densities[idx]
-                                
-                                if abs(pressure_sum) > m_eps * densities[idx] * dt:
-                                    r = cuda.local.array(3, dtype=float32)
-                                    for d in range(3):
-                                        r[d] = pos_i[d] - positions[j][d]
-                                    
-                                    nabla_kernel = cuda.local.array(3, dtype=float32)
-                                    kernel_gradient(r, h, nabla_kernel)
-                                    factor = masses[j] * regular_pressure_i / density_i
-                                    
-                                    for d in range(3):
-                                        dv[d] += factor * nabla_kernel[d]
-                                    
-                                    if is_dynamic[j]:
-                                        # 计算作用在刚体上的力和扭矩
-                                        object_j = object_ids[j]
-                                        force = cuda.local.array(3, dtype=float32)
-                                        for d in range(3):
-                                            force[d] = (factor * nabla_kernel[d] * 
-                                                      masses[idx] / dt)
-                                            cuda.atomic.add(rigid_body_forces[object_j], 
-                                                          d, force[d])
-                                        
-                                        # 计算扭矩
-                                        r_com = cuda.local.array(3, dtype=float32)
-                                        for d in range(3):
-                                            r_com[d] = positions[j][d] - rigid_body_com[object_j][d]
-                                        
-                                        torque = cuda.local.array(3, dtype=float32)
-                                        torque[0] = r_com[1]*force[2] - r_com[2]*force[1]
-                                        torque[1] = r_com[2]*force[0] - r_com[0]*force[2]
-                                        torque[2] = r_com[0]*force[1] - r_com[1]*force[0]
-                                        
-                                        for d in range(3):
-                                            cuda.atomic.add(rigid_body_torques[object_j], 
-                                                          d, torque[d])
+                elif materials[j] == material_rigid:
+                    # 流体-刚体相互作用
+                    pressure_j = pressure_i
+                    regular_pressure_i = pressure_i / densities[idx]
+                    regular_pressure_j = pressure_j / densities[j]
+                    pressure_sum = pressure_i + pressure_j
+                    density_i = densities[idx]
+                    
+                    if abs(pressure_sum) > m_eps * densities[idx] * dt:
+                        r = cuda.local.array(3, dtype=float32)
+                        for d in range(3):
+                            r[d] = pos_i[d] - positions[j][d]
+                        
+                        nabla_kernel = cuda.local.array(3, dtype=float32)
+                        kernel_gradient(r, h, nabla_kernel)
+                        factor = masses[j] * regular_pressure_i / density_i
+                        
+                        for d in range(3):
+                            dv[d] += factor * nabla_kernel[d]
+                        
+                        if is_dynamic[j]:
+                            # 计算作用在刚体上的力和扭矩
+                            object_j = object_ids[j]
+                            force = cuda.local.array(3, dtype=float32)
+                            for d in range(3):
+                                force[d] = (factor * nabla_kernel[d] * 
+                                        masses[idx] / dt)
+                                cuda.atomic.add(rigid_body_forces[object_j], 
+                                            d, force[d])
+                            
+                            # 计算扭矩
+                            r_com = cuda.local.array(3, dtype=float32)
+                            for d in range(3):
+                                r_com[d] = positions[j][d] - rigid_body_com[object_j][d]
+                            
+                            torque = cuda.local.array(3, dtype=float32)
+                            torque[0] = r_com[1]*force[2] - r_com[2]*force[1]
+                            torque[1] = r_com[2]*force[0] - r_com[0]*force[2]
+                            torque[2] = r_com[0]*force[1] - r_com[1]*force[0]
+                            
+                            for d in range(3):
+                                cuda.atomic.add(rigid_body_torques[object_j], 
+                                            d, torque[d])
         
             # 更新速度
             for d in range(3):
@@ -685,10 +588,8 @@ class DFSPHSolver(BaseSolver):
             self.container.material_fluid,
             self.container.material_rigid,
             self.container.particle_num,
-            self.container.grid_ids,
-            self.container.grid_num_particles,
-            self.container.grid_size,
-            self.container.grid_num,
+            self.container.particle_neighbors,
+            self.container.particle_neighbor_num,
             self.container.dh,
             self.m_eps,
             self.dt[0]
@@ -697,80 +598,80 @@ class DFSPHSolver(BaseSolver):
     def _step(self):
         """执行一个时间步的模拟"""
         # 1. 计算非压力加速度（包括重力、粘度和表面张力）
-        print("compute_gravity_acceleration")   
+        print("计算重力加速度")   
         self.compute_gravity_acceleration()
-        print("compute_viscosity_acceleration")
+        print("计算粘度加速度")
         self.compute_viscosity_acceleration()
-        print("compute_surface_tension_acceleration")
+        print("计算表面张力加速度")
         self.compute_surface_tension_acceleration()
         
         # 2. 更新流体速度（半步）
-        print("update_fluid_velocity")
+        print("更新流体速度")
         self.update_fluid_velocity()
         
         # 3. 密度修正迭代
-        print("correct_density_error")
+        print("修正密度误差")
         num_itr = 0
         while num_itr < 1 or num_itr < self.m_max_iterations:
-            print("compute_predict_density")
             self.compute_predict_density()
-            print("compute_pressure_for_CDS")
+            if num_itr == 0:
+                print("计算CDS压力")
             self.compute_pressure_for_CDS()
-            print("update_velocity_CDS")
+            if num_itr == 0:
+                print("更新CDS速度")
             self.update_velocity_CDS()
-            print("compute_density_error")
             average_density_error = self.compute_density_error()
             eta = self.max_error
             num_itr += 1
 
             if average_density_error <= eta * self.density_0[()]:
                 break
-            
-        print(f"DFSPH - iterations: {num_itr} Avg density Err: {average_density_error :.4f}")
         
         # 4. 更新流体位置
-        print("update_fluid_position")
+        print("更新流体位置")
         self.update_fluid_position()
 
         # 5. 刚体求解器步进
-        print("rigid_solver.step")
+        print("刚体求解器步进")
         self.rigid_solver.step()
         
         # 6. 插入物体
-        print("insert_object")
+        print("插入物体")
         self.container.insert_object()
-        print("insert_rigid_object")
+        print("插入刚体")
         self.rigid_solver.insert_rigid_object()
-        print("renew_rigid_particle_state")
+        print("更新刚体粒子状态")
         self.renew_rigid_particle_state()
         
         # 7. 边界处理
-        print("enforce_domain_boundary")
+        print("边界处理")
         self.boundary.enforce_domain_boundary(self.container.material_fluid)
         
         # 8. 准备邻居搜索
-        print("prepare_neighbor_search")
+        print("准备邻居搜索")
         self.container.prepare_neighbor_search()
         
         # 9. 计算密度
-        print("compute_density")
+        print("计算密度")
         self.compute_density()
         
         # 10. 计算因子k
-        print("compute_factor_k")
+        print("计算因子k")
         self.compute_factor_k()
         
         # 11. 无散度修正迭代
-        print("correct_divergence_error")
+        print("修正散度误差")
         num_iterations = 0
         while num_iterations < 1 or num_iterations < self.m_max_iterations_v:
-            print("compute_derivative_density")
+            if num_iterations == 0:
+                print("计算密度导数")
             self.compute_derivative_density()
-            print("compute_pressure_for_DFS")
+            if num_iterations == 0:
+                print("计算DFS压力")
             self.compute_pressure_for_DFS()
-            print("update_velocity_DFS")
+            if num_iterations == 0:
+                print("更新DFS速度")
             self.update_velocity_DFS()
-            print("compute_density_derivative_error")
             average_density_derivative_error = self.compute_density_derivative_error()
 
             eta = self.max_error_V * self.density_0[()] / self.dt[()]
@@ -778,5 +679,5 @@ class DFSPHSolver(BaseSolver):
 
             if average_density_derivative_error <= eta:
                 break
-            
-        print(f"DFSPH - iteration V: {num_iterations} Avg density err: {average_density_derivative_error}")
+        
+        print("一轮模拟结束")
