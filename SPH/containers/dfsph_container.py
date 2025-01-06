@@ -11,4 +11,10 @@ class DFSPHContainer(BaseContainer):
         self.particle_dfsph_predict_density = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_dfsph_pressure = ti.field(dtype=float, shape=self.particle_max_num)
         self.particle_dfsph_pressure_v = ti.field(dtype=float, shape=self.particle_max_num)
+        
+        self.m_max_iterations_v = 1000
+        self.m_max_iterations = 1000
+        self.m_eps = 1e-5
+        self.max_error_V = 0.001
+        self.max_error = 0.0001
 

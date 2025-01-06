@@ -7,13 +7,6 @@ from ..utils.kernel import *
 class DFSPH_LSolver(BaseSolver):
     def __init__(self, container:DFSPHContainer):
         super().__init__(container)
-        self.m_max_iterations_v = 1000
-        self.m_max_iterations = 1000
-
-        self.m_eps = 1e-5
-
-        self.max_error_V = 0.001
-        self.max_error = 0.0001
         
         self.fluid_density_error = ti.field(float, shape=self.container.max_object_num)
         self.fluid_density_count = ti.field(int, shape=self.container.max_object_num)
@@ -35,12 +28,10 @@ class DFSPH_LSolver(BaseSolver):
             if self.container.particle_materials[i] == 1:
                 ret = ti.Struct(derivative_density=0.0, num_neighbors=0)
                 self.container.for_all_neighbors(i, self.compute_derivative_density_task, ret)
-               
-                derivative_density = ti.max(ret.derivative_density, 0.0)
-                num_neighbors = ret.num_neighbors
-
-                if num_neighbors < 20:
-                    derivative_density = 0.0
+                
+                derivative_density = 0.0
+                if ret.num_neighbors > 20 and ret.derivative_density > 0.0:
+                    derivative_density = ret.derivative_density
                
                 self.container.particle_dfsph_derivative_densities[i] = derivative_density 
                 
@@ -55,7 +46,6 @@ class DFSPH_LSolver(BaseSolver):
         ret.derivative_density += self.container.particle_masses[p_j] * ti.math.dot(vel_i - vel_j, nabla_kernel)
         
         ret.num_neighbors += 1
-        
         
     @ti.kernel
     def compute_factor_k(self):
@@ -78,20 +68,19 @@ class DFSPH_LSolver(BaseSolver):
                 factor_k = 0.0
                 if sum_grad > threshold:
                     factor_k = self.container.particle_densities[i] * self.container.particle_densities[i] / sum_grad
-                else:
-                    factor_k = 0.0
-                
+
                 self.container.particle_dfsph_factor_k[i]= factor_k                
                 
     @ti.func
     def compute_factor_k_task(self, p_i, p_j, ret: ti.template()):
+        pos_i = self.container.particle_positions[p_i]
+        pos_j = self.container.particle_positions[p_j]
         if self.container.particle_materials[p_j] == self.container.material_fluid:
-            grad_p_j = self.container.particle_masses[p_j] * self.kernel.gradient(self.container.particle_positions[p_i] - self.container.particle_positions[p_j], self.container.dh)
+            grad_p_j = self.container.particle_masses[p_j] * self.kernel.gradient(pos_i - pos_j, self.container.dh)
             ret.grad_norm_sum += grad_p_j.norm_sqr()
             ret.grad_sum += grad_p_j
-
-        elif self.container.particle_materials[p_j] == self.container.material_rigid:
-            grad_p_j = self.container.particle_masses[p_j] * self.kernel.gradient(self.container.particle_positions[p_i] - self.container.particle_positions[p_j], self.container.dh)
+        else:
+            grad_p_j = self.container.particle_masses[p_j] * self.kernel.gradient(pos_i - pos_j, self.container.dh)
             ret.grad_sum += grad_p_j
     
     @ti.kernel
@@ -106,13 +95,15 @@ class DFSPH_LSolver(BaseSolver):
             if self.container.particle_materials[p_i] == self.container.material_fluid:
                 derivative_density = 0.0
                 self.container.for_all_neighbors(p_i, self.compute_predict_density_task, derivative_density)
+                
                 predict_density = self.container.particle_densities[p_i] + self.dt[None] * derivative_density
-                self.container.particle_dfsph_predict_density[p_i] = ti.max(predict_density, 1000.0)
+                if predict_density < self.container.particle_rest_densities[p_i]:
+                    predict_density = self.container.particle_rest_densities[p_i]
+                    
+                self.container.particle_dfsph_predict_density[p_i] = predict_density
               
     @ti.func
     def compute_predict_density_task(self, p_i, p_j, ret: ti.template()):
-        # here we use partilce rest volume instead of mass
-        # Fluid neighbor and rigid neighbor are treated the same
         pos_i = self.container.particle_positions[p_i]
         pos_j = self.container.particle_positions[p_j]
         vel_i = self.container.particle_velocities[p_i]
@@ -125,12 +116,13 @@ class DFSPH_LSolver(BaseSolver):
     def compute_pressure_for_CDS(self):
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_fluid:
-                self.container.particle_dfsph_pressure[p_i] = (self.container.particle_dfsph_predict_density[p_i] - self.container.particle_rest_densities[p_i]) * self.container.particle_dfsph_factor_k[p_i] / self.dt[None]
+                error_density = self.container.particle_dfsph_predict_density[p_i] - self.container.particle_rest_densities[p_i]
+                self.container.particle_dfsph_pressure[p_i] = error_density * self.container.particle_dfsph_factor_k[p_i] / self.dt[None]
                 
     ############## Divergence-free Solver ################
     def correct_divergence_error(self):
         num_iterations = 0
-        while num_iterations < 1 or num_iterations < self.m_max_iterations:
+        while num_iterations < 1 or num_iterations < self.container.m_max_iterations:
             self.compute_derivative_density()
             self.compute_pressure_for_DFS()
             self.update_velocity_DFS()
@@ -140,7 +132,7 @@ class DFSPH_LSolver(BaseSolver):
             for i, e in enumerate(all_errors):
                 oid = self.fluid_object_list[i]
                 fluid_density = self.container.object_densities[oid]
-                if e > (self.max_error_V * fluid_density / self.dt[None]):
+                if e > (self.container.max_error_V * fluid_density / self.dt[None]):
                     all_pass = False
                     break
 
@@ -167,7 +159,7 @@ class DFSPH_LSolver(BaseSolver):
             regular_pressure_i = pressure_i / self.container.particle_densities[p_i]
             regular_pressure_j = pressure_j / self.container.particle_densities[p_j]
             pressure_sum = pressure_i + pressure_j
-            if ti.abs(pressure_sum) > self.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
+            if ti.abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
                 nabla_kernel = self.kernel.gradient(self.container.particle_positions[p_i] - self.container.particle_positions[p_j], self.container.dh)
                 ret.dv += self.container.particle_masses[p_j] * (regular_pressure_i / self.container.particle_densities[p_i] + regular_pressure_j / self.container.particle_densities[p_j]) * nabla_kernel
         
@@ -178,7 +170,7 @@ class DFSPH_LSolver(BaseSolver):
             regular_pressure_j = pressure_j / self.container.particle_densities[p_j]
             pressure_sum = pressure_i + pressure_j
             density_i = self.container.particle_densities[p_i]
-            if ti.abs(pressure_sum) > self.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
+            if ti.abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
                 nabla_kernel = self.kernel.gradient(self.container.particle_positions[p_i] - self.container.particle_positions[p_j], self.container.dh) 
                 ret.dv += self.container.particle_masses[p_j] * (regular_pressure_i / density_i) * nabla_kernel
                 
@@ -220,7 +212,7 @@ class DFSPH_LSolver(BaseSolver):
     ################# Constant Density Solver #################
     def correct_density_error(self):
         num_itr = 0
-        while num_itr < 1 or num_itr < self.m_max_iterations:
+        while num_itr < 1 or num_itr < self.container.m_max_iterations:
             self.compute_predict_density()
             self.compute_pressure_for_CDS()
             self.update_velocity_CDS()
@@ -232,7 +224,7 @@ class DFSPH_LSolver(BaseSolver):
             fluid_num = self.container.fluid_object_num[None]
             for idx, e in enumerate(all_errors):
                 oid = self.fluid_object_list[idx]
-                if e > self.max_error * self.container.object_densities[oid]:
+                if e > self.container.max_error * self.container.object_densities[oid]:
                     all_pass = False
                     break
 
@@ -258,7 +250,7 @@ class DFSPH_LSolver(BaseSolver):
             regular_pressure_i = pressure_i / self.container.particle_densities[p_i]
             regular_pressure_j = pressure_j / self.container.particle_densities[p_j]
             pressure_sum = pressure_i + pressure_j
-            if ti.abs(pressure_sum) > self.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
+            if ti.abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
                 nabla_kernel = self.kernel.gradient(self.container.particle_positions[p_i] - self.container.particle_positions[p_j], self.container.dh)
                 ret.dv += self.container.particle_masses[p_j] * (regular_pressure_i / self.container.particle_densities[p_i] + regular_pressure_j / self.container.particle_densities[p_j]) * nabla_kernel
         
@@ -270,7 +262,7 @@ class DFSPH_LSolver(BaseSolver):
             pressure_sum = pressure_i + pressure_j
             density_i = self.container.particle_densities[p_i]
             
-            if ti.abs(pressure_sum) > self.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
+            if ti.abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
                 nabla_kernel = self.kernel.gradient(self.container.particle_positions[p_i] - self.container.particle_positions[p_j], self.container.dh)
                 ret.dv += self.container.particle_masses[p_j] * (regular_pressure_i / density_i) * nabla_kernel
                 
