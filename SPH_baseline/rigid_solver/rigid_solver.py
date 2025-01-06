@@ -5,70 +5,72 @@ from ..containers import BaseContainerBaseline
 
 class RigidSolverBaseline():
     def __init__(self, container: BaseContainerBaseline, gravity: Tuple[float, float, float] = (0, -9.8, 0), dt: float = 1e-3):
-        self.container = container
-        self.total_time = 0.0
-        self.present_rigid_object = []
-        self.rigid_body_scales = {}
-        self.gravity = np.array(gravity)
+        # 使用字典初始化基础属性
+        solver_attrs = {
+            'container': container,
+            'total_time': 0.0,
+            'present_rigid_object': [],
+            'rigid_body_scales': {},
+            'gravity': np.array(gravity),
+            'dt': dt,
+            'cfg': container.cfg
+        }
+        
+        for name, value in solver_attrs.items():
+            setattr(self, name, value)
+            
+        config_bodies = {
+            'rigid_bodies': self.cfg.get_rigid_bodies(),
+            'rigid_blocks': self.cfg.get_rigid_blocks()
+        }
+        for name, value in config_bodies.items():
+            setattr(self, name, value)
 
-        self.cfg = container.cfg
-        self.rigid_bodies = self.cfg.get_rigid_bodies()
-        self.rigid_blocks = self.cfg.get_rigid_blocks()
-        num_rigid_bodies = len(self.rigid_bodies) + len(self.rigid_blocks)
-        self.dt = dt
+    def _compute_rotation_matrix(self, angle: float, direction: list) -> np.ndarray:
+        """计算旋转矩阵"""
+        rad = angle / 360 * (2 * math.pi)
+        euler = np.array([d * rad for d in direction])
+        c = np.cos(euler)
+        s = np.sin(euler)
+        
+        return np.array([
+            [c[1] * c[2], -c[1] * s[2], s[1]],
+            [s[0] * s[1] * c[2] + c[0] * s[2], -s[0] * s[1] * s[2] + c[0] * c[2], -s[0] * c[1]],
+            [-c[0] * s[1] * c[2] + s[0] * s[2], c[0] * s[1] * s[2] + s[0] * c[2], c[0] * c[1]]
+        ])
 
-    def insert_rigid_object(self):
-        for rigid_body in self.rigid_bodies:
-            self.init_rigid_body(rigid_body)
-
-        for rigid_block in self.rigid_blocks:
-            self.init_rigid_block(rigid_block)
-
-    def create_boundary(self, thickness: float = 0.01):
-        eps = self.container.diameter + self.container.boundary_thickness 
-        domain_start = self.container.domain_start
-        domain_end = self.container.domain_end
-
-        self.start = np.array(domain_start) + eps
-        self.end = np.array(domain_end) - eps
-
-    def init_rigid_body(self, rigid_body):
-        index = rigid_body["objectId"]
-
-        # dealing with entry time
-        if index in self.present_rigid_object:
+    def init_rigid_body(self, rigid_body: dict):
+        """初始化刚体对象"""
+        obj_id = rigid_body["objectId"]
+        
+        # 检查时间和存在性条件
+        if obj_id in self.present_rigid_object or rigid_body["entryTime"] > self.total_time:
             return
-        if rigid_body["entryTime"] > self.total_time:
+
+        # 处理动态刚体
+        if not rigid_body["isDynamic"]:
             return
-
-        is_dynamic = rigid_body["isDynamic"]
-        if is_dynamic:
-            velocity = np.array(rigid_body["velocity"], dtype=np.float32)
-        else:
-            velocity = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-
-        is_dynamic = rigid_body["isDynamic"]
-        if not is_dynamic:
-            return
-        else:
-            angle = rigid_body["rotationAngle"] / 360 * (2 * math.pi)
-            direction = rigid_body["rotationAxis"]
-            euler = np.array([direction[0] * angle, direction[1] * angle, direction[2] * angle])
-            cx, cy, cz = np.cos(euler)
-            sx, sy, sz = np.sin(euler)
-
-            self.rigid_body_scales[index] = np.array(rigid_body["scale"], dtype=np.float32)
-            self.container.rigid_body_velocities[index] = np.array(rigid_body["velocity"], dtype=np.float32)
-            self.container.rigid_body_angular_velocities[index] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-            self.container.rigid_body_original_com[index] = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-            self.container.rigid_body_com[index] = np.array(rigid_body["translation"])
-            self.container.rigid_body_rotations[index] = np.array([
-                [cy * cz, -cy * sz, sy],
-                [sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy],
-                [-cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy]
-            ])
-
-        self.present_rigid_object.append(index)
+            
+        # 初始化刚体属性
+        body_attrs = {
+            'scale': rigid_body["scale"],
+            'velocity': rigid_body["velocity"],
+            'translation': rigid_body["translation"],
+            'rotation': self._compute_rotation_matrix(
+                rigid_body["rotationAngle"], 
+                rigid_body["rotationAxis"]
+            )
+        }
+        
+        # 设置刚体属性
+        self.rigid_body_scales[obj_id] = np.array(body_attrs['scale'], dtype=np.float32)
+        self.container.rigid_body_velocities[obj_id] = np.array(body_attrs['velocity'], dtype=np.float32)
+        self.container.rigid_body_angular_velocities[obj_id] = np.zeros(3, dtype=np.float32)
+        self.container.rigid_body_original_com[obj_id] = np.zeros(3, dtype=np.float32)
+        self.container.rigid_body_com[obj_id] = np.array(body_attrs['translation'])
+        self.container.rigid_body_rotations[obj_id] = body_attrs['rotation']
+        
+        self.present_rigid_object.append(obj_id)
         
     def init_rigid_block(self, rigid_block):
         pass
