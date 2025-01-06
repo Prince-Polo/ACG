@@ -16,7 +16,6 @@ class IISPHSolver(BaseSolver):
     @ti.func  
     def compute_sum_dij_task(self, i, j, ret: ti.template()):
         nabla_kernel = self.kernel.gradient(self.container.particle_positions[i] - self.container.particle_positions[j], self.container.dh)
-        
         regular_volumn_j = self.container.particle_masses[j] / self.container.particle_densities[j]
         ret += regular_volumn_j * nabla_kernel / self.container.particle_densities[j]
 

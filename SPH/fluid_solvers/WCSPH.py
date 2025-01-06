@@ -54,14 +54,13 @@ class WCSPHSolver(BaseSolver):
     def _compute_fluid_pressure_acc(self, p_i, p_j, den_i, den_j, nabla_ij):
         regular_pressure_i = self.container.particle_pressures[p_i] / den_i
         regular_pressure_j = self.container.particle_pressures[p_j] / den_j
-        pressure_term = (regular_pressure_i / den_i + 
-                        regular_pressure_j / den_j)
+        pressure_term = regular_pressure_i / den_i + regular_pressure_j / den_j
         return -self.container.particle_masses[p_j] * pressure_term * nabla_ij
 
     @ti.func
     def _compute_rigid_pressure_acc(self, p_i, p_j, den_i, nabla_ij):
-        return (-self.density_0 * self.container.particle_rest_volumes[p_j] * 
-                self.container.particle_pressures[p_i] / (den_i * den_i) * nabla_ij)
+        regular_pressure_i = self.container.particle_pressures[p_i] / den_i
+        return (-self.container.particle_masses[p_j] * regular_pressure_i * nabla_ij/ den_i)
 
     @ti.func
     def _apply_rigid_body_force(self, p_i, p_j):

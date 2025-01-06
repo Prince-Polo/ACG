@@ -212,9 +212,7 @@ class BaseContainerBaseline:
         for fluid in self.fluid_blocks:
             obj_id = fluid["objectId"]
             
-            if obj_id in self.present_object:
-                continue
-            if fluid["entryTime"] > self.total_time:
+            if obj_id in self.present_object or fluid["entryTime"] > self.total_time:
                 continue
             
             offset = np.array(fluid["translation"])
@@ -225,7 +223,6 @@ class BaseContainerBaseline:
             density = fluid["density"]
             color = fluid["color"]
             self.object_id_fluid_body.add(obj_id)
-            
             self.object_visibility[obj_id] = fluid.get("visible", 1)
             self.object_materials[obj_id] = self.material_fluid
             self.object_densities[obj_id] = density
