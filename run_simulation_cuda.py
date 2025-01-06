@@ -5,86 +5,132 @@ from SPH.utils import SimConfig
 from SPH.containers.dfsph_container_numba import DFSPHContainer
 from SPH.fluid_solvers.dfsph_solver_numba import DFSPHSolver
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--scene_file',
-                        default='',
-                        help='scene file')
-    args = parser.parse_args()
-    scene_path = args.scene_file
-    config = SimConfig(scene_file_path=scene_path)
-    scene_name = scene_path.split("/")[-1].split(".")[0]
-
-    output_frames = config.get_cfg("exportFrame")
-
-    fps = config.get_cfg("fps")
-    if fps == None:
-        fps = 60
-
-    frame_time = 1.0 / fps
-
-    output_interval = int(frame_time / config.get_cfg("timeStepSize"))
-
-    total_time = config.get_cfg("totalTime")
-    if total_time == None:
-        total_time = 10.0
-
-    total_rounds = int(total_time / config.get_cfg("timeStepSize"))
+class PhysicsSimulator:
+    """物理模拟系统"""
     
-    if config.get_cfg("outputInterval"):
-        output_interval = config.get_cfg("outputInterval")
-
-    output_ply = config.get_cfg("exportPly")
-    output_obj = config.get_cfg("exportObj")
-
-    os.makedirs(f"{scene_name}_output", exist_ok=True)
-
-    simulation_method = config.get_cfg("simulationMethod")
-    if simulation_method == "dfsph":
-        container = DFSPHContainer(config)
-        solver = DFSPHSolver(container)
-    else:
-        raise NotImplementedError(f"Simulation method {simulation_method} not implemented")
-
-    solver.prepare()
-
-    cnt = 0
-    cnt_ply = 0
-
-    while cnt < total_rounds:
-        solver.step()
+    def __init__(self, scene_path: str):
+        self.scene_path = scene_path
+        self.scene_name = os.path.splitext(os.path.basename(scene_path))[0]
+        self.config = SimConfig(scene_file_path=scene_path)
+        self._prepare_simulation()
         
-        if output_frames:
-            if cnt % output_interval == 0:
-                os.makedirs(f"{scene_name}_output/{cnt:06}", exist_ok=True)
-                # 保存粒子位置到文件
-                positions = container.particle_positions.copy_to_host()
-                np.save(f"{scene_name}_output/{cnt:06}/positions.npy", positions)
+    def _prepare_simulation(self):
+        """准备模拟环境"""
+        self._init_timing()
+        self._init_output()
+        self._init_domain()
+        self._init_solver()
         
-        if cnt % output_interval == 0:
-            if output_ply:
-                os.makedirs(f"{scene_name}_output/{cnt:06}", exist_ok=True)
-                for f_body_id in container.object_id_fluid_body:
-                    obj_data = container.dump(obj_id=f_body_id)
-                    np_pos = obj_data["position"]
-                    with open(f"{scene_name}_output/{cnt:06}/particle_object_{f_body_id}.ply", 'w') as f:
-                        f.write("ply\n")
-                        f.write("format ascii 1.0\n")
-                        f.write(f"element vertex {len(np_pos)}\n")
-                        f.write("property float x\n")
-                        f.write("property float y\n")
-                        f.write("property float z\n")
-                        f.write("end_header\n")
-                        for pos in np_pos:
-                            f.write(f"{pos[0]} {pos[1]} {pos[2]}\n")
+    def _init_timing(self):
+        """初始化时间参数"""
+        self.time_step = self.config.get_cfg("timeStepSize")
+        self.fps = self.config.get_cfg("fps") or 60
+        self.total_time = self.config.get_cfg("totalTime") or 10.0
+        self.output_interval = self.config.get_cfg("outputInterval") or int(1.0 / (self.fps * self.time_step))
+        self.max_steps = int(self.total_time / self.time_step)
+        
+    def _init_output(self):
+        """初始化输出设置"""
+        self.output_root = f"output_{self.scene_name}"
+        os.makedirs(self.output_root, exist_ok=True)
+        
+        self.save_ply = self.config.get_cfg("exportPly")
+        self.save_obj = self.config.get_cfg("exportObj")
+        
+    def _init_domain(self):
+        """初始化模拟域"""
+        self.domain_end = self.config.get_cfg("domainEnd")
+        self.dim = len(self.domain_end)
             
-            if output_obj:
-                os.makedirs(f"{scene_name}_output/{cnt:06}", exist_ok=True)
-                for r_body_id in container.object_id_rigid_body:
-                    with open(f"{scene_name}_output/{cnt:06}/mesh_object_{r_body_id}.obj", "w") as f:
-                        e = container.object_collection[r_body_id]["mesh"].export(file_type='obj')
-                        f.write(e)
+    def _init_solver(self):
+        """初始化求解器"""
+        method = self.config.get_cfg("simulationMethod")
+        solver_map = {
+            "dfsph": (DFSPHContainer, DFSPHSolver)
+        }
+        
+        if method not in solver_map:
+            raise ValueError(f"未支持的模拟方法: {method}")
+            
+        container_cls, solver_cls = solver_map[method]
+        self.container = container_cls(self.config)
+        self.solver = solver_cls(self.container)
+            
+    def _save_outputs(self, step):
+        """保存输出文件"""
+        if step % self.output_interval != 0:
+            return
+            
+        frame_dir = f"{self.output_root}/{step:06d}"
+        os.makedirs(frame_dir, exist_ok=True)
+            
+        if self.save_ply:
+            self._save_particles(frame_dir)
+            
+        if self.save_obj:
+            self._save_meshes(frame_dir)
+            
+    def _save_particles(self, directory):
+        """保存粒子数据"""
+        for body_id in self.container.object_id_fluid_body:
+            data = self.container.dump(obj_id=body_id)
+            pos = data["position"]
+            
+            writer = PLYWriter(num_vertices=len(pos))
+            writer.add_vertex_pos(pos[:, 0], pos[:, 1], 
+                                pos[:, 2] if self.dim == 3 else None)
+            writer.export_ascii(f"{directory}/fluid_{body_id}.ply")
+            
+    def _save_meshes(self, directory):
+        """保存网格数据"""
+        for body_id in self.container.object_id_rigid_body:
+            mesh = self.container.object_collection[body_id]["mesh"]
+            with open(f"{directory}/rigid_{body_id}.obj", 'w') as f:
+                f.write(mesh.export(file_type='obj'))
+                
+    def execute(self):
+        """执行模拟"""
+        self.solver.prepare()
+        
+        for step in range(self.max_steps):
+            self.solver.step()
+            self._save_outputs(step)
+            
+        print("模拟完成")
 
-        cnt += 1
 
-    print(f"Simulation Finished")
+class PLYWriter:
+    """PLY文件写入器"""
+    def __init__(self, num_vertices):
+        self.num_vertices = num_vertices
+        self.vertex_pos = []
+        
+    def add_vertex_pos(self, x, y, z=None):
+        if z is not None:
+            self.vertex_pos = np.column_stack((x, y, z))
+        else:
+            self.vertex_pos = np.column_stack((x, y))
+            
+    def export_ascii(self, filename):
+        with open(filename, 'w') as f:
+            # 写入头部
+            f.write("ply\n")
+            f.write("format ascii 1.0\n")
+            f.write(f"element vertex {self.num_vertices}\n")
+            f.write("property float x\n")
+            f.write("property float y\n")
+            if self.vertex_pos.shape[1] > 2:
+                f.write("property float z\n")
+            f.write("end_header\n")
+            
+            # 写入顶点数据
+            np.savetxt(f, self.vertex_pos)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="物理模拟系统")
+    parser.add_argument('--scene_file', required=True, help='场景配置文件路径')
+    args = parser.parse_args()
+    
+    simulator = PhysicsSimulator(args.scene_file)
+    simulator.execute()

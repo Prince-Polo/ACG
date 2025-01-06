@@ -746,30 +746,22 @@ def add_particle_device(particle_positions, particle_velocities, particle_densit
                        particle_object_ids, particle_is_dynamic, rigid_particle_original_positions,
                        p, obj_id, x, v, density, pressure, material, is_dynamic, color, V0):
     """设备函数：添加一个粒子"""
-    # 向量属性(3D)
-    vector_props = {
-        'positions': (particle_positions, x),
-        'velocities': (particle_velocities, v),
-        'rigid_positions': (rigid_particle_original_positions, x),
-        'colors': (particle_colors, color)
-    }
-    for prop_name, (array, value) in vector_props.items():
-        for d in range(3):
-            array[p, d] = value[d]
+    # 3D向量属性赋值
+    for d in range(3):
+        particle_positions[p, d] = x[d]
+        particle_velocities[p, d] = v[d]
+        rigid_particle_original_positions[p, d] = x[d]
+        particle_colors[p, d] = color[d]
     
-    # 标量属性
-    scalar_props = {
-        'densities': (particle_densities, density),
-        'pressures': (particle_pressures, pressure),
-        'rest_densities': (particle_rest_densities, density),
-        'rest_volumes': (particle_rest_volumes, V0),
-        'masses': (particle_masses, V0 * density),
-        'materials': (particle_materials, material),
-        'object_ids': (particle_object_ids, obj_id),
-        'is_dynamic': (particle_is_dynamic, is_dynamic)
-    }
-    for prop_name, (array, value) in scalar_props.items():
-        array[p] = value
+    # 标量属性赋值
+    particle_densities[p] = density
+    particle_pressures[p] = pressure
+    particle_rest_densities[p] = density
+    particle_rest_volumes[p] = V0
+    particle_masses[p] = V0 * density
+    particle_materials[p] = material
+    particle_object_ids[p] = obj_id 
+    particle_is_dynamic[p] = is_dynamic
 
 @cuda.jit
 def add_particles_kernel(particle_positions, particle_velocities, particle_densities,
