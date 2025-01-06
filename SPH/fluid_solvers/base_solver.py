@@ -98,12 +98,8 @@ class BaseSolver():
         material = self.container.particle_materials[p_i]
         if material == self.container.material_fluid:
             acc = ti.Vector([0.0 for _ in range(self.container.dim)])
-            self._accumulate_tension_force(p_i, acc)
+            self.container.for_all_neighbors(p_i, self.compute_surface_tension_acceleration_task, acc)
             self._apply_tension_acc(p_i, acc)
-                
-    @ti.func
-    def _accumulate_tension_force(self, p_i: int, acc: ti.template()):
-        self.container.for_all_neighbors(p_i, self.compute_surface_tension_acceleration_task, acc)
                 
     @ti.func
     def _apply_tension_acc(self, p_i: int, acc: ti.template()):
