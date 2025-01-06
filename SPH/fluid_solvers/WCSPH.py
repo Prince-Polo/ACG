@@ -1,7 +1,7 @@
 import taichi as ti
 from .base_solver import BaseSolver
 from ..containers.base_container import BaseContainer
-from .utils import *
+from ..utils.kernel import *
 
 @ti.data_oriented
 class WCSPHSolver(BaseSolver):

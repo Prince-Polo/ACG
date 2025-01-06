@@ -1,8 +1,8 @@
 import taichi as ti
 import numpy as np
 from ..containers import BaseContainer
-from .utils import *
-from .boundary import Boundary
+from ..utils.kernel import *
+from ..utils.boundary import Boundary
 from ..rigid_solver import RigidSolver
 
 

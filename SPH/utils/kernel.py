@@ -1,9 +1,5 @@
 import taichi as ti
-import numpy as np
 import math
-import time
-import os
-import sys
 
 @ti.data_oriented
 class CubicKernel():

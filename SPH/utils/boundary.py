@@ -2,7 +2,7 @@ import taichi as ti
 import numpy as np
 import math
 from ..containers import BaseContainer
-from .utils import *
+from .kernel import *
 
 @ti.data_oriented
 class Boundary():

@@ -1,7 +1,7 @@
 import taichi as ti
 from .base_solver import BaseSolver
 from ..containers.iisph_container import IISPHContainer
-from .utils import *
+from ..utils.kernel import *
 
 @ti.data_oriented
 class IISPHSolver(BaseSolver):

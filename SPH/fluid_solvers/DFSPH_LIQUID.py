@@ -1,7 +1,7 @@
 import taichi as ti
 from .base_solver import BaseSolver
 from ..containers.dfsph_container import DFSPHContainer
-from .utils import *
+from ..utils.kernel import *
 
 @ti.data_oriented
 class DFSPH_LSolver(BaseSolver):
