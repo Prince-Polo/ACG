@@ -168,10 +168,7 @@ class PhysicsSimulator:
                 
     def _update_visualization(self):
         """更新可视化"""
-        self.container.copy_to_vis_buffer(
-            invisible_objects=self.config.get_cfg("invisibleObjects", []),
-            dim=self.dim
-        )
+        self.container.copy_to_vis_buffer()
         
         # 设置场景
         self.scene.ambient_light((0.1, 0.1, 0.15))

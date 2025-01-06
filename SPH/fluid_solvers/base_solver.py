@@ -20,8 +20,8 @@ class BaseSolver():
         self.density_0 = self.cfg.get_cfg("density0")
 
         # surface tension
-        if self.container.cfg.get_cfg("surface_tension"):
-            self.surface_tension = self.container.cfg.get_cfg("surface_tension")
+        if self.cfg.get_cfg("surface_tension"):
+            self.surface_tension = self.cfg.get_cfg("surface_tension")
         else:
             self.surface_tension = 0.01
 
@@ -35,7 +35,7 @@ class BaseSolver():
         # time step
         self.dt = ti.field(float, shape=())
         self.dt[None] = 1e-4
-        self.dt[None] = self.container.cfg.get_cfg("timeStepSize")
+        self.dt[None] = self.cfg.get_cfg("timeStepSize")
 
         # kernel
         self.kernel = CubicKernel()
@@ -44,8 +44,8 @@ class BaseSolver():
         self.boundary = Boundary(self.container)
 
         # others
-        if self.container.cfg.get_cfg("gravitationUpper"):
-            self.g_upper = self.container.cfg.get_cfg("gravitationUpper")
+        if self.cfg.get_cfg("gravitationUpper"):
+            self.g_upper = self.cfg.get_cfg("gravitationUpper")
         else:
             self.g_upper = 10000.0
 
@@ -83,22 +83,6 @@ class BaseSolver():
             distance = (pos_i - pos_j).norm()
             # Accumulate the kernel weight based on the distance between particles
             volume += self.kernel.weight(distance, self.container.dh)
-
-    @ti.kernel
-    def compute_pressure_acceleration(self):
-        """
-        Compute the pressure acceleration for each particle.
-        """
-        self.container.particle_accelerations.fill(0.0)
-        for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_is_dynamic[p_i]:
-                if self.container.particle_materials[p_i] == self.container.material_fluid:
-                    # Initialize acceleration vector
-                    acceleration = ti.Vector([0.0 for _ in range(self.container.dim)])
-                    # Iterate over all neighbors to compute the pressure acceleration
-                    self.container.for_all_neighbors(p_i, self.compute_pressure_acceleration_task, acceleration)
-                    # Assign computed acceleration to the particle
-                    self.container.particle_accelerations[p_i] = acceleration
 
     def compute_non_pressure_acceleration(self):
         # computing acceleration from gravity, surface tension and viscosity

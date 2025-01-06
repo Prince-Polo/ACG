@@ -7,195 +7,261 @@ from ..utils import SimConfig
 @ti.data_oriented
 class BaseContainer:
     def __init__(self, config: SimConfig, GGUI = False):
-        self.dim = 3
-        self.GGUI = GGUI
-        self.cfg = config
-        self.total_time = 0
-
-        self.gravity = ti.Vector([0.0, -9.81, 0.0])
-        self.domain_start = np.array(self.cfg.get_cfg("domainStart"))
-        self.domain_end = np.array(self.cfg.get_cfg("domainEnd"))
+        # 基础配置
+        basic_attrs = {
+            'dim': 3,
+            'GGUI': GGUI,
+            'cfg': config,
+            'total_time': 0,
+            'gravity': ti.Vector([0.0, -9.81, 0.0]),
+            'domain_start': np.array(config.get_cfg("domainStart")),
+            'domain_end': np.array(config.get_cfg("domainEnd")),
+            'material_rigid': 2,
+            'material_fluid': 1,
+            'max_object_num': 10
+        }
+        for name, value in basic_attrs.items():
+            setattr(self, name, value)
 
         self.domain_size = self.domain_end - self.domain_start
 
-        self.material_rigid = 2
-        self.material_fluid = 1
-
+        # 粒子参数
         self.radius = self.cfg.get_cfg("particleRadius")
-        self.diameter = 2 * self.radius
-        self.V0 = 0.8 * self.diameter ** self.dim
-        self.dh = 4 * self.radius
-        
-        self.max_object_num = 10
+        derived_params = {
+            'diameter': 2 * self.radius,
+            'V0': 0.8 * (2 * self.radius) ** self.dim,
+            'dh': 4 * self.radius,
+            'grid_size': 4 * self.radius,
+            'padding': 4 * self.radius,
+            'boundary_thickness': 0.0,
+            'add_boundary': self.cfg.get_cfg("addDomainBox")
+        }
+        for name, value in derived_params.items():
+            setattr(self, name, value)
 
-        self.grid_size = self.dh
-        self.padding = self.grid_size
-        self.boundary_thickness = 0.0
-        self.add_boundary = self.cfg.get_cfg("addDomainBox")
-        
         if self.add_boundary:
-            self.domain_start = [self.domain_start[i] + self.padding for i in range(self.dim)]
-            self.domain_end = [self.domain_end[i] - self.padding for i in range(self.dim)]
-            self.boundary_thickness = 0.03
+            self._process_boundary()
         
         self.grid_num = np.ceil(self.domain_size / self.grid_size).astype(int)
 
-        # All objects id and its particle num
-        self.object_collection = dict()
-        self.object_id_rigid_body = set()
-        self.object_id_fluid_body = set()
-        self.present_object = []
+        # 初始化集合和数组
+        collections = {
+            'object_collection': dict(),
+            'object_id_rigid_body': set(),
+            'object_id_fluid_body': set(),
+            'present_object': [],
+            'fluid_bodies': self.cfg.get_fluid_bodies(),
+            'fluid_blocks': self.cfg.get_fluid_blocks(),
+            'rigid_bodies': self.cfg.get_rigid_bodies()
+        }
+        for name, value in collections.items():
+            setattr(self, name, value)
 
-        #========== Compute number of particles ==========#
-        self.fluid_bodies = self.cfg.get_fluid_bodies()
-        self.fluid_blocks = self.cfg.get_fluid_blocks()
-        self.rigid_bodies = self.cfg.get_rigid_bodies()
+        # 计算粒子数量
+        particle_counts = {
+            'fluid_particle_num': op.fluid_block_processor(self.dim, self.cfg, self.diameter),
+            'rigid_particle_num': op.rigid_body_processor(self.cfg, self.diameter)
+        }
+        for name, value in particle_counts.items():
+            setattr(self, name, value)
 
-        self.fluid_particle_num = op.fluid_block_processor(self.dim, self.cfg, self.diameter)
-        self.rigid_particle_num = op.rigid_body_processor(self.cfg, self.diameter)      
-        self.particle_max_num = (self.fluid_particle_num + self.rigid_particle_num 
-                                + (op.compute_box_particle_num(self.dim, self.domain_start, self.domain_end, diameter = self.diameter, thickness=self.boundary_thickness) if self.add_boundary else 0)
-                                )    
-                       
+        boundary_particles = (op.compute_box_particle_num(self.dim, self.domain_start, self.domain_end, 
+                            diameter=self.diameter, thickness=self.boundary_thickness) if self.add_boundary else 0)
+        self.particle_max_num = self.fluid_particle_num + self.rigid_particle_num + boundary_particles
+
+        # 分配内存
+        num_grid = reduce(lambda x, y: x * y, self.grid_num)
+        self._allocate_grid_storage(num_grid)
+        self._allocate_particle_arrays()
+        
         fluid_object_num = len(self.fluid_blocks) + len(self.fluid_bodies)
         rigid_object_num = len(self.rigid_bodies)
-        
-        #========== Allocate memory ==========#
-        # Particle num of each grid
-        num_grid = reduce(lambda x, y: x * y, self.grid_num)
-        self.particle_num = ti.field(int, shape=())
-        self.grid_num_particles = ti.field(int, shape=int(num_grid))
-        self.grid_num_particles_temp = ti.field(int, shape=int(num_grid))
+        self._allocate_object_arrays(fluid_object_num, rigid_object_num)
 
+        if self.add_boundary:
+            self._setup_boundary_object()
+
+    def _process_boundary(self):
+        """处理边界条件"""
+        updates = {
+            'domain_start': np.array([coord + self.padding for coord in self.domain_start]),
+            'domain_end': np.array([coord - self.padding for coord in self.domain_end]),
+            'boundary_thickness': 0.03
+        }
+        for name, value in updates.items():
+            setattr(self, name, value)
+
+    def _allocate_grid_storage(self, total_cells):
+        """分配网格存储空间"""
+        grid_fields = {
+            'particle_num': (),
+            'grid_num_particles': total_cells,
+            'grid_num_particles_temp': total_cells
+        }
+        for name, shape in grid_fields.items():
+            setattr(self, name, ti.field(dtype=int, shape=shape))
+            
         self.prefix_sum_executor = ti.algorithms.PrefixSumExecutor(self.grid_num_particles.shape[0])
 
-        # Particle related properties
-        self.particle_object_ids = ti.field(dtype=int, shape=self.particle_max_num)
-        self.particle_positions = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-        self.particle_velocities = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-        self.particle_accelerations = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-        self.particle_rest_volumes = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_rest_densities = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_masses = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_densities = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_pressures = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_materials = ti.field(dtype=int, shape=self.particle_max_num)
-        self.particle_colors = ti.Vector.field(3, dtype=int, shape=self.particle_max_num)
-        self.particle_is_dynamic = ti.field(dtype=int, shape=self.particle_max_num)
-        self.rigid_particle_num = ti.field(int, shape=())
-        self.fluid_particle_num = ti.field(int, shape=())
-        self.rigid_particle_original_positions = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
+    def _allocate_particle_arrays(self):
+        """分配粒子属性数组"""
+        max_p = self.particle_max_num
+        dim = self.dim
         
-        self.object_materials = ti.field(dtype=int, shape=self.max_object_num)
-        self.object_densities = ti.field(dtype=float, shape=self.max_object_num)
-        self.object_num = ti.field(dtype=int, shape=())
-        self.fluid_object_num = ti.field(dtype=int, shape=())
-        self.rigid_object_num = ti.field(dtype=int, shape=())
-        self.object_num[None] = fluid_object_num + rigid_object_num + (1 if self.add_boundary else 0) # add 1 for domain box object
-        self.fluid_object_num[None] = fluid_object_num
-        self.rigid_object_num[None] = rigid_object_num
+        # 向量字段
+        vector_fields = {
+            'particle_positions': (dim, max_p),
+            'particle_velocities': (dim, max_p),
+            'particle_accelerations': (dim, max_p),
+            'particle_colors': (3, max_p),
+            'rigid_particle_original_positions': (dim, max_p),
+            'x_vis_buffer': (dim, max_p) if self.GGUI else None,
+            'color_vis_buffer': (3, max_p) if self.GGUI else None,
+            # 添加缓冲区向量字段
+            'particle_positions_buffer': (dim, max_p),
+            'rigid_particle_original_positions_buffer': (dim, max_p),
+            'particle_velocities_buffer': (dim, max_p),
+            'particle_colors_buffer': (3, max_p)
+        }
+        for name, params in vector_fields.items():
+            if params is not None:
+                vec_dim, size = params
+                dtype = int if 'colors' in name else float
+                setattr(self, name, ti.Vector.field(n=vec_dim, dtype=dtype, shape=size))
 
-        self.rigid_body_is_dynamic = ti.field(dtype=int, shape=self.max_object_num)
-        self.rigid_body_original_com = ti.Vector.field(self.dim, dtype=float, shape=self.max_object_num)
-        self.rigid_body_masses = ti.field(dtype=float, shape=self.max_object_num)
-        self.rigid_body_com = ti.Vector.field(self.dim, dtype=float, shape=self.max_object_num)
-        self.rigid_body_rotations = ti.Matrix.field(self.dim, self.dim, dtype=float, shape=self.max_object_num)
-        self.rigid_body_torques = ti.Vector.field(self.dim, dtype=float, shape=self.max_object_num)
-        self.rigid_body_forces = ti.Vector.field(self.dim, dtype=float, shape=self.max_object_num)
-        self.rigid_body_velocities = ti.Vector.field(self.dim, dtype=float, shape=self.max_object_num)
-        self.rigid_body_angular_velocities = ti.Vector.field(self.dim, dtype=float, shape=self.max_object_num)
-        self.rigid_body_particle_num = ti.field(dtype=int, shape=self.max_object_num)
-        
-        # Buffer for sort
-        self.particle_object_ids_buffer = ti.field(dtype=int, shape=self.particle_max_num)
-        self.particle_positions_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-        self.rigid_particle_original_positions_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-        self.particle_velocities_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-        self.particle_rest_volumes_buffer = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_rest_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_masses_buffer = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_densities_buffer = ti.field(dtype=float, shape=self.particle_max_num)
-        self.particle_materials_buffer = ti.field(dtype=int, shape=self.particle_max_num)
-        self.particle_colors_buffer = ti.Vector.field(3, dtype=int, shape=self.particle_max_num)
-        self.is_dynamic_buffer = ti.field(dtype=int, shape=self.particle_max_num)
-
-        # Visibility of object
-        self.object_visibility = ti.field(dtype=int, shape=self.max_object_num)
-
-        # Grid id for each particle
-        self.grid_ids = ti.field(int, shape=self.particle_max_num)
-        self.grid_ids_buffer = ti.field(int, shape=self.particle_max_num)
-        self.grid_ids_new = ti.field(int, shape=self.particle_max_num)
-        
-        self.x_vis_buffer = None
-        if self.GGUI:
-            self.x_vis_buffer = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-            self.color_vis_buffer = ti.Vector.field(3, dtype=float, shape=self.particle_max_num)
-        
-        if self.add_boundary:
-            self.add_boundary_object(
-                object_id = self.object_num[None] - 1,
-                domain_start = self.domain_start,
-                domain_end = self.domain_end,
-                thickness = self.boundary_thickness,
-                material = self.material_rigid,
-                is_dynamic = False,
-                space = self.diameter,
-                color = (127,127,127)
-            )
+        # 标量字段
+        scalar_fields = {
+            'particle_object_ids': (int, max_p),
+            'particle_materials': (int, max_p),
+            'particle_is_dynamic': (int, max_p),
+            'particle_rest_volumes': (float, max_p),
+            'particle_rest_densities': (float, max_p),
+            'particle_masses': (float, max_p),
+            'particle_densities': (float, max_p),
+            'particle_pressures': (float, max_p),
+            'grid_ids': (int, max_p),
+            'grid_ids_buffer': (int, max_p),
+            'grid_ids_new': (int, max_p),
+            'particle_object_ids_buffer': (int, max_p),
+            'particle_rest_volumes_buffer': (float, max_p),
+            'particle_rest_densities_buffer': (float, max_p),
+            'particle_masses_buffer': (float, max_p),
+            'particle_densities_buffer': (float, max_p),
+            'particle_materials_buffer': (int, max_p),
+            'is_dynamic_buffer': (int, max_p),
+            'fluid_particle_num': (int, ()),
+            'rigid_particle_num': (int, ())
+        }
+        for name, (dtype, shape) in scalar_fields.items():
+            setattr(self, name, ti.field(dtype=dtype, shape=shape))
             
-            self.object_visibility[self.object_num[None]-1] = 0
-            self.object_materials[self.object_num[None]-1] = self.material_rigid
-            self.object_densities[self.object_num[None]-1] = 1000.0
-            self.rigid_body_is_dynamic[self.object_num[None]-1] = 0
-            self.rigid_body_velocities[self.object_num[None]-1] = ti.Vector([0.0 for _ in range(self.dim)])
-            self.object_collection[self.object_num[None]-1] = 0
+
+    def _allocate_object_arrays(self, fluid_count, rigid_count):
+        """分配对象数组"""
+        max_obj = self.max_object_num
+        dim = self.dim
+        
+        # 标量字段
+        scalar_fields = {
+            'object_materials': (int, max_obj),
+            'object_densities': (float, max_obj),
+            'object_visibility': (int, max_obj),
+            'rigid_body_is_dynamic': (int, max_obj),
+            'rigid_body_masses': (float, max_obj),
+            'rigid_body_particle_num': (int, max_obj),
+            'object_num': (int, ()),
+            'fluid_object_num': (int, ()),
+            'rigid_object_num': (int, ())
+        }
+        for name, (dtype, shape) in scalar_fields.items():
+            setattr(self, name, ti.field(dtype=dtype, shape=shape))
+
+        # 向量字段
+        vector_fields = {
+            'rigid_body_original_com': (dim, max_obj),
+            'rigid_body_com': (dim, max_obj),
+            'rigid_body_torques': (dim, max_obj),
+            'rigid_body_forces': (dim, max_obj),
+            'rigid_body_velocities': (dim, max_obj),
+            'rigid_body_angular_velocities': (dim, max_obj)
+        }
+        for name, (vec_dim, size) in vector_fields.items():
+            setattr(self, name, ti.Vector.field(vec_dim, dtype=float, shape=size))
+
+        # 矩阵字段
+        self.rigid_body_rotations = ti.Matrix.field(dim, dim, dtype=float, shape=max_obj)
+
+        # 设置计数
+        total = fluid_count + rigid_count + (1 if self.add_boundary else 0)
+        counts = {
+            'object_num': total,
+            'fluid_object_num': fluid_count,
+            'rigid_object_num': rigid_count
+        }
+        for name, value in counts.items():
+            field = getattr(self, name)
+            field[None] = value
+
+    def _setup_boundary_object(self):
+        """设置边界对象"""
+        obj_id = self.object_num[None] - 1
+        
+        # 添加边界粒子
+        self.add_boundary_object(
+            object_id=obj_id,
+            domain_start=self.domain_start,
+            domain_end=self.domain_end,
+            thickness=self.boundary_thickness,
+            material=self.material_rigid,
+            is_dynamic=False,
+            color=(128, 128, 128),  # 灰色边界
+            density=1000.0
+        )
+        
+        self.object_collection[obj_id] = 0
     
     ######## add all kinds of particles ########    
     def insert_object(self):
-        #fluid block
+        # 处理流体块
         for fluid in self.fluid_blocks:
             obj_id = fluid["objectId"]
-
+            
             if obj_id in self.present_object:
                 continue
             if fluid["entryTime"] > self.total_time:
                 continue
     
             offset = np.array(fluid["translation"])
-            start = np.array(fluid["start"]) + offset
-            end = np.array(fluid["end"]) + offset
-            scale = np.array(fluid["scale"])
-            velocity = fluid["velocity"]
-            density = fluid["density"]
-            color = fluid["color"]
-            self.object_id_fluid_body.add(obj_id)
+            cube_params = {
+                'start': np.array(fluid["start"]) + offset,
+                'end': np.array(fluid["end"]) + offset,
+                'scale': np.array(fluid["scale"]),
+                'velocity': fluid["velocity"],
+                'density': fluid["density"],
+                'color': fluid["color"]
+            }
             
-            if "visible" in fluid:
-                self.object_visibility[obj_id] = fluid["visible"]
-            else:
-                self.object_visibility[obj_id] = 1
-                
+            self.object_id_fluid_body.add(obj_id)
+            self.object_visibility[obj_id] = fluid.get("visible", 1)
             self.object_materials[obj_id] = self.material_fluid
-            self.object_densities[obj_id] = density
+            self.object_densities[obj_id] = cube_params['density']
             self.object_collection[obj_id] = fluid
             
             self.add_cube(
                 object_id = obj_id,
-                start = start,
-                end = end,
-                scale = scale,
-                material= self.material_fluid,
+                start = cube_params['start'],
+                end = cube_params['end'],
+                scale = cube_params['scale'],
+                material = self.material_fluid,
                 is_dynamic = True,
-                color = color,
-                velocity = velocity,
-                density = density,
-                diameter = self.diameter,
-                )
+                color = cube_params['color'],
+                velocity = cube_params['velocity'],
+                density = cube_params['density'],
+            )
             
             self.present_object.append(obj_id)
         
-        #rigid body
+        # 处理刚体
         for rigid in self.rigid_bodies:
             obj_id = rigid["objectId"]
             
@@ -206,279 +272,287 @@ class BaseContainer:
             
             self.object_id_rigid_body.add(obj_id)
             particle_num = rigid["particleNum"]
-            voxelized_points_np = rigid["voxelizedPoints"]
             
-            velocity = np.array(fluid["velocity"], dtype=np.float32)
-            density = rigid["density"]
-            color = np.array(rigid["color"], dtype=np.int32)
-            is_dynamic = rigid["isDynamic"]
+            # 基础参数
+            rigid_params = {
+                'points': np.array(rigid["voxelizedPoints"], dtype=np.float32),
+                'velocity': np.array(rigid["velocity"], dtype=np.float32),
+                'density': rigid["density"],
+                'color': np.array(rigid["color"], dtype=np.int32),
+                'is_dynamic': rigid["isDynamic"]
+            }
             
-            if "visible" in rigid:
-                self.object_visibility[obj_id] = rigid["visible"]
-            else:
-                self.object_visibility[obj_id] = 1
-            
+            # 设置对象属性
+            self.object_visibility[obj_id] = rigid.get("visible", 1)
             self.object_materials[obj_id] = self.material_rigid
-            self.object_densities[obj_id] = density
+            self.object_densities[obj_id] = rigid_params['density']
             self.object_collection[obj_id] = rigid
             
+            # 添加粒子
             self.add_particles(
                 obj_id,
                 particle_num,
-                np.array(voxelized_points_np, dtype=np.float32), # position
-                np.stack([velocity for _ in range(particle_num)]), # velocity
-                density * np.ones(particle_num, dtype=np.float32), # density
-                np.zeros(particle_num, dtype=np.float32), # pressure
-                np.array([self.material_rigid for _ in range(particle_num)], dtype=np.int32), 
-                is_dynamic * np.ones(particle_num, dtype=np.int32), # is_dynamic
-                np.stack([color for _ in range(particle_num)])
+                rigid_params['points'],
+                np.stack([rigid_params['velocity'] for _ in range(particle_num)]),
+                rigid_params['density'] * np.ones(particle_num, dtype=np.float32),
+                np.zeros(particle_num, dtype=np.float32),
+                np.array([self.material_rigid for _ in range(particle_num)], dtype=np.int32),
+                rigid_params['is_dynamic'] * np.ones(particle_num, dtype=np.int32),
+                np.stack([rigid_params['color'] for _ in range(particle_num)])
             )
             
-            self.rigid_body_is_dynamic[obj_id] = is_dynamic
-            self.rigid_body_velocities[obj_id] = velocity
+            self.rigid_body_is_dynamic[obj_id] = rigid_params['is_dynamic']
+            self.rigid_body_velocities[obj_id] = rigid_params['velocity']
             self.rigid_particle_num[None] += particle_num
             self.rigid_body_particle_num[obj_id] = particle_num
         
-            if is_dynamic:
-                velocity = np.array(rigid["velocity"], dtype=np.float32)
+            if rigid_params['is_dynamic']:
                 self.rigid_body_masses[obj_id] = self.compute_rigid_mass(obj_id)
                 self.rigid_body_com[obj_id] = self.compute_rigid_com(obj_id)
                 self.rigid_body_is_dynamic[obj_id] = 1
-            else:
-                velocity = np.array([0.0 for _ in range(self.dim)], dtype=np.float32)
         
             self.present_object.append(obj_id)
         
     @ti.kernel
     def compute_rigid_mass(self, objId: int) -> ti.f32:
-        sum_mass = 0.0
+        mass = 0.0
         for i in range(self.particle_num[None]):
-            if self.particle_object_ids[i] == objId and self.particle_is_dynamic[i]:
-                sum_mass += self.particle_rest_densities[i] * self.V0
-        return sum_mass
+            if self._is_target_dynamic_particle(i, objId):
+                mass += self.particle_rest_densities[i] * self.V0
+        return mass
     
     @ti.kernel
     def compute_rigid_com(self, objId: int) -> ti.types.vector(3, float):
-        sum_com = ti.Vector([0.0 for _ in range(self.dim)])
+        com = ti.Vector([0.0 for _ in range(self.dim)])
         for i in range(self.particle_num[None]):
-            if self.particle_object_ids[i] == objId and self.particle_is_dynamic[i]:
-                sum_com += self.particle_positions[i] * self.particle_rest_densities[i] * self.V0
-
-        return sum_com / self.rigid_body_masses[objId]
+            if self._is_target_dynamic_particle(i, objId):
+                com += self.particle_positions[i] * self.particle_rest_densities[i] * self.V0
+        return com / self.rigid_body_masses[objId]
             
     @ti.func
-    def add_particle(self, p, obj_id, x, v, density, pressure, material, is_dynamic, color):
-        self.particle_object_ids[p] = obj_id
-        self.particle_positions[p] = x
-        self.rigid_particle_original_positions[p] = x
-        self.particle_velocities[p] = v
-        self.particle_densities[p] = density
-        self.particle_rest_volumes[p] = self.V0
-        self.particle_rest_densities[p] = density
-        self.particle_masses[p] = self.V0 * density
-        self.particle_pressures[p] = pressure
-        self.particle_materials[p] = material
-        self.particle_is_dynamic[p] = is_dynamic
-        self.particle_colors[p] = color
+    def _is_target_dynamic_particle(self, p_idx: int, obj_id: int) -> ti.i32:
+        """检查粒子是否属于指定的动态物体"""
+        return self.particle_object_ids[p_idx] == obj_id and self.particle_is_dynamic[p_idx]
     
-    def add_particles(self,
-                      object_id: int,
-                      new_particles_num: int,
-                      new_particles_positions: ti.types.ndarray(),
-                      new_particles_velocity: ti.types.ndarray(),
-                      new_particle_density: ti.types.ndarray(),
-                      new_particle_pressure: ti.types.ndarray(),
-                      new_particles_material: ti.types.ndarray(),
-                      new_particles_is_dynamic: ti.types.ndarray(),
-                      new_particles_color: ti.types.ndarray()
-                      ):
-        
-        self._add_particles(object_id,
-                      new_particles_num,
-                      new_particles_positions,
-                      new_particles_velocity,
-                      new_particle_density,
-                      new_particle_pressure,
-                      new_particles_material,
-                      new_particles_is_dynamic,
-                      new_particles_color
-                      )
+    @ti.func
+    def add_particle(self, p, obj_id, x, v, density, pressure, material, is_dynamic, color):
+        """添加单个粒子"""
+        particle_attrs = {
+            'particle_object_ids': obj_id,
+            'particle_positions': x,
+            'particle_velocities': v,
+            'particle_densities': density,
+            'particle_rest_volumes': self.V0,
+            'particle_rest_densities': density,
+            'particle_masses': self.V0 * density,
+            'particle_pressures': pressure,
+            'particle_materials': material,
+            'particle_is_dynamic': is_dynamic,
+            'particle_colors': color
+        }
+        self._set_particle_attrs(p, particle_attrs)
+        self.rigid_particle_original_positions[p] = x
+
+    @ti.func
+    def _set_particle_attrs(self, p, attrs: ti.template()):
+        """设置粒子属性"""
+        self.particle_object_ids[p] = attrs['particle_object_ids']
+        self.particle_positions[p] = attrs['particle_positions']
+        self.particle_velocities[p] = attrs['particle_velocities']
+        self.particle_densities[p] = attrs['particle_densities']
+        self.particle_rest_volumes[p] = attrs['particle_rest_volumes']
+        self.particle_rest_densities[p] = attrs['particle_rest_densities']
+        self.particle_masses[p] = attrs['particle_masses']
+        self.particle_pressures[p] = attrs['particle_pressures']
+        self.particle_materials[p] = attrs['particle_materials']
+        self.particle_is_dynamic[p] = attrs['particle_is_dynamic']
+        self.particle_colors[p] = attrs['particle_colors']
+    
+    def add_particles(self, object_id: int, new_particles_num: int, new_particles_positions: ti.types.ndarray(), new_particles_velocity: ti.types.ndarray(), new_particle_density: ti.types.ndarray(), new_particle_pressure: ti.types.ndarray(), new_particles_material: ti.types.ndarray(), new_particles_is_dynamic: ti.types.ndarray(),new_particles_color: ti.types.ndarray()):
+        self._add_particles(object_id, new_particles_num, new_particles_positions, new_particles_velocity, new_particle_density, new_particle_pressure, new_particles_material, new_particles_is_dynamic, new_particles_color)
     
     @ti.kernel
-    def _add_particles(self,
-                      object_id: int,
-                      new_particles_num: int,
-                      new_particles_positions: ti.types.ndarray(),
-                      new_particles_velocity: ti.types.ndarray(),
-                      new_particle_density: ti.types.ndarray(),
-                      new_particle_pressure: ti.types.ndarray(),
-                      new_particles_material: ti.types.ndarray(),
-                      new_particles_is_dynamic: ti.types.ndarray(),
-                      new_particles_color: ti.types.ndarray()):
+    def _add_particles(self, object_id: int,new_particles_num: int,new_particles_positions: ti.types.ndarray(), new_particles_velocity: ti.types.ndarray(), new_particle_density: ti.types.ndarray(), new_particle_pressure: ti.types.ndarray(), new_particles_material: ti.types.ndarray(), new_particles_is_dynamic: ti.types.ndarray(), new_particles_color: ti.types.ndarray()):
         for p in range(self.particle_num[None], self.particle_num[None] + new_particles_num):
-            v = ti.Vector.zero(float, self.dim)
-            x = ti.Vector.zero(float, self.dim)
-            for d in ti.static(range(self.dim)):
-                v[d] = new_particles_velocity[p - self.particle_num[None], d]
-                x[d] = new_particles_positions[p - self.particle_num[None], d]
-            self.add_particle(p, object_id, x, v,
-                              new_particle_density[p - self.particle_num[None]],
-                              new_particle_pressure[p - self.particle_num[None]],
-                              new_particles_material[p - self.particle_num[None]],
-                              new_particles_is_dynamic[p - self.particle_num[None]],
-                              ti.Vector([new_particles_color[p - self.particle_num[None], i] for i in range(3)])
-                              )
+            idx = p - self.particle_num[None]
+            x = ti.Vector([new_particles_positions[idx, d] for d in range(self.dim)])
+            v = ti.Vector([new_particles_velocity[idx, d] for d in range(self.dim)])
+            color = ti.Vector([new_particles_color[idx, i] for i in range(3)])
+            
+            self.add_particle(p, object_id, x, v, new_particle_density[idx], new_particle_pressure[idx], new_particles_material[idx],new_particles_is_dynamic[idx],color)
         self.particle_num[None] += new_particles_num
         
-    def add_cube(
-        self,
-        object_id,
-        start,
-        end,
-        scale,
-        material,
-        is_dynamic=True,
-        color=(0,0,0),
-        density=None,
-        velocity=None,
-        pressure=None,
-        diameter=None,
-    ):
-        if diameter is None:
-            diameter = self.diameter
-        num_dim = [np.arange(start[i] * scale[i], end[i] * scale[i], diameter) for i in range(self.dim)]
-        new_positions = np.array(np.meshgrid(*num_dim,
-                                             sparse=False,
-                                             indexing='ij'),
-                                 dtype=np.float32)
-        new_positions = new_positions.reshape(-1,
-                                              reduce(lambda x, y: x * y, list(new_positions.shape[1:]))).transpose()
-        num_new_particles = new_positions.shape[0]
-        new_velocities = np.zeros_like(new_positions, dtype=np.float32) if velocity is None else np.tile(velocity, (num_new_particles, 1))
-        new_densities = np.ones(num_new_particles) * (density if density is not None else 1000.)
-        new_pressures = np.zeros(num_new_particles) if pressure is None else np.ones(num_new_particles) * pressure
-        new_materials = np.ones(num_new_particles, dtype=np.int32) * material
-        new_is_dynamic = np.ones(num_new_particles, dtype=np.int32) * is_dynamic
-        new_colors = np.tile(color, (num_new_particles, 1))
+    def add_cube( self, object_id, start, end, scale, material, is_dynamic=True, color=(0,0,0), density=None, velocity=None, pressure=None,):      
+        num_dim = [np.arange(start[i] * scale[i], end[i] * scale[i], self.diameter) for i in range(self.dim)]
+        new_positions = self._create_mesh_grid(num_dim)
+        
+        # 准备粒子属性
+        num_particles = new_positions.shape[0]
+        
+        # 创建粒子属性数组
+        velocities = np.zeros_like(new_positions) if velocity is None else np.tile(velocity, (num_particles, 1))
+        densities = np.ones(num_particles) * (density if density is not None else 1000.)
+        pressures = np.zeros(num_particles) if pressure is None else np.ones(num_particles) * pressure
+        materials = np.ones(num_particles, dtype=np.int32) * material
+        is_dynamics = np.ones(num_particles, dtype=np.int32) * is_dynamic
+        colors = np.tile(color, (num_particles, 1))
 
-        self.add_particles(object_id, num_new_particles, new_positions, new_velocities, new_densities, new_pressures, new_materials, new_is_dynamic, new_colors)
+        # 添加粒子
+        self.add_particles(object_id,num_particles,new_positions,velocities,densities,pressures, materials,is_dynamics,colors)
         
         if material == self.material_fluid:
-            self.fluid_particle_num[None] += num_new_particles
+            self.fluid_particle_num[None] += num_particles
     
-    def add_boundary_object(
-        self,
-        object_id,
-        domain_start,
-        domain_end,
-        thickness,
-        material=0,
-        is_dynamic=False,
-        color=(0,0,0),
-        density=None,
-        pressure=None,
-        velocity=None,
-        space=None,
-    ):
-        if space is None:
-            space = self.diameter
-        num_dim = [np.arange(domain_start[i], domain_end[i], space) for i in range(self.dim)]
-        new_positions = np.array(np.meshgrid(*num_dim,
-                                             sparse=False,
-                                             indexing='ij'),
-                                 dtype=np.float32)
-        new_positions = new_positions.reshape(-1,
-                                              reduce(lambda x, y: x * y, list(new_positions.shape[1:]))).transpose()
-        mask =np.zeros(new_positions.shape[0], dtype=bool)
-        for i in range(self.dim):
-            mask = mask | ((new_positions[:, i] <= domain_start[i] + thickness) | (new_positions[:, i] >= domain_end[i] - thickness))
-        new_positions = new_positions[mask]
-        new_velocities = np.zeros_like(new_positions, dtype=np.float32) if velocity is None else np.tile(velocity, (new_positions.shape[0], 1))
-        new_densities = np.ones(new_positions.shape[0]) * (density if density is not None else 1000.)
-        new_pressures = np.zeros(new_positions.shape[0]) if pressure is None else np.ones(new_positions.shape[0]) * pressure
-        new_materials = np.ones(new_positions.shape[0], dtype=np.int32) * material
-        new_is_dynamic = np.ones(new_positions.shape[0], dtype=np.int32) * is_dynamic
-        new_colors = np.tile(color, (new_positions.shape[0], 1))
+    def add_boundary_object( self, object_id,domain_start,domain_end, thickness, material=0, is_dynamic=False,color=(128, 128, 128), density=None, pressure=None, velocity=None):
+        num_dim = [np.arange(domain_start[i], domain_end[i], self.diameter) for i in range(self.dim)]
+        positions = self._create_mesh_grid(num_dim)
+        mask = self._create_boundary_mask(positions, domain_start, domain_end, thickness)
+        positions = positions[mask]
+        new_velocities = np.zeros_like(positions, dtype=np.float32) if velocity is None else np.tile(velocity, (positions.shape[0], 1))
+        new_densities = np.ones(positions.shape[0]) * (density if density is not None else 1000.)
+        new_pressures = np.zeros(positions.shape[0]) if pressure is None else np.ones(positions.shape[0]) * pressure
+        new_materials = np.ones(positions.shape[0], dtype=np.int32) * material
+        new_is_dynamic = np.ones(positions.shape[0], dtype=np.int32) * is_dynamic
+        new_colors = np.tile(color, (positions.shape[0], 1))
 
-        self.add_particles(object_id, new_positions.shape[0], new_positions, new_velocities, new_densities, new_pressures, new_materials, new_is_dynamic, new_colors)
+        self.add_particles(object_id, positions.shape[0], positions, new_velocities, new_densities, new_pressures, new_materials, new_is_dynamic, new_colors)
         
     @ti.func
     def pos_to_index(self, pos):
-        return (pos / self.grid_size).cast(int)
-
+        average = pos / self.grid_size
+        return ti.cast(average, ti.i32)
 
     @ti.func
     def flatten_grid_index(self, grid_index):
         ret = 0
         for i in ti.static(range(self.dim)):
-            ret_p = grid_index[i]
             for j in ti.static(range(i+1, self.dim)):
-                ret_p *= self.grid_num[j]
-            ret += ret_p
-        
+                grid_index[i] *= self.grid_num[j]
+            ret += grid_index[i]
         return ret
-    
-    @ti.func
-    def get_flatten_grid_index(self, pos):
-        return self.flatten_grid_index(self.pos_to_index(pos))
-    
-    @ti.func
-    def is_static_rigid_body(self, p):
-        return self.particle_materials[p] == self.material_rigid and (not self.particle_is_dynamic[p])
-
-    @ti.func
-    def is_dynamic_rigid_body(self, p):
-        return self.particle_materials[p] == self.material_rigid and self.particle_is_dynamic[p]
     
     ###### initial grid ######
     @ti.kernel
     def init_grid(self):
+        """初始化网格结构"""
         self.grid_num_particles.fill(0)
+        self._count_particles_per_grid()
+        self._copy_grid_counts()
+    
+    @ti.func
+    def _count_particles_per_grid(self):
+        """统计每个网格中的粒子数量"""
         for i in range(self.particle_num[None]):
-            grid_id = self.get_flatten_grid_index(self.particle_positions[i])
+            grid_id = self.flatten_grid_index(self.pos_to_index(self.particle_positions[i]))
             self.grid_ids[i] = grid_id
             ti.atomic_add(self.grid_num_particles[grid_id], 1)
+            
+    @ti.func
+    def _copy_grid_counts(self):
+        """复制网格粒子计数到临时数组"""
+        for i in ti.grouped(self.grid_num_particles):
+            self._update_temp_count(i)
+            
+    @ti.func
+    def _update_temp_count(self, grid_idx: ti.template()):
+        """更新单个网格的临时计数"""
+        self.grid_num_particles_temp[grid_idx] = self.grid_num_particles[grid_idx]
+    
+    def compute_particle_in_grid(self):
+        for i in range(self.particle_num[None]):
+            grid_id = self.flatten_grid_index(self.pos_to_index(self.particle_positions[i]))
+            self.grid_ids[i] = grid_id
+            self.grid_num_particles[grid_id] += 1
+    
+    def update_buffer_count(self):
         for i in ti.grouped(self.grid_num_particles):
             self.grid_num_particles_temp[i] = self.grid_num_particles[i]
     
     @ti.kernel
     def particles_sort(self):
+        """对粒子进行排序"""
+        self._compute_new_indices()
+        self._copy_to_buffers()
+        self._copy_from_buffers()
+
+    @ti.func
+    def _compute_new_indices(self):
+        """计算粒子的新索引位置"""
         for i in range(self.particle_num[None]):
             j = self.particle_num[None] - 1 - i
-            base_offset = 0
-            if self.grid_ids[j] -1 >= 0:
-                base_offset = self.grid_num_particles[self.grid_ids[j] - 1]
-            self.grid_ids_new[j] = ti.atomic_sub(self.grid_num_particles_temp[self.grid_ids[j]], 1) - 1 + base_offset
+            base_offset = self._get_base_offset(j)
+            self.grid_ids_new[j] = self._compute_particle_index(j, base_offset)
+            
+    @ti.func
+    def _get_base_offset(self, idx: int) -> int:
+        """获取基础偏移量"""
+        offset = 0
+        if self.grid_ids[idx] >= 1:
+            offset = self.grid_num_particles[self.grid_ids[idx] - 1]
+        return offset
+    
+    @ti.func
+    def _compute_particle_index(self, idx: int, base_offset: int) -> int:
+        """计算单个粒子的新索引"""
+        return (ti.atomic_sub(self.grid_num_particles_temp[self.grid_ids[idx]], 1)  - 1 + base_offset)
 
+    @ti.func
+    def _copy_to_buffers(self):
+        """将粒子数据复制到缓冲区"""
         for i in range(self.particle_num[None]):
-            new_index = self.grid_ids_new[i]
-            self.grid_ids_buffer[new_index] = self.grid_ids[i]
-            self.particle_object_ids_buffer[new_index] = self.particle_object_ids[i]
-            self.rigid_particle_original_positions_buffer[new_index] = self.rigid_particle_original_positions[i]
-            self.particle_positions_buffer[new_index] = self.particle_positions[i]
-            self.particle_velocities_buffer[new_index] = self.particle_velocities[i]
-            self.particle_rest_volumes_buffer[new_index] = self.particle_rest_volumes[i]
-            self.particle_rest_densities_buffer[new_index] = self.particle_rest_densities[i]
-            self.particle_masses_buffer[new_index] = self.particle_masses[i]
-            self.particle_densities_buffer[new_index] = self.particle_densities[i]
-            self.particle_materials_buffer[new_index] = self.particle_materials[i]
-            self.particle_colors_buffer[new_index] = self.particle_colors[i]
-            self.is_dynamic_buffer[new_index] = self.particle_is_dynamic[i]
-            
+            self._copy_particle_data(i, self.grid_ids_new[i], True)
+
+    @ti.func
+    def _copy_from_buffers(self):
+        """从缓冲区复制回粒子数据"""
         for i in range(self.particle_num[None]):
-            self.grid_ids[i] = self.grid_ids_buffer[i]
-            self.particle_object_ids[i] = self.particle_object_ids_buffer[i]
-            self.rigid_particle_original_positions[i] = self.rigid_particle_original_positions_buffer[i]
-            self.particle_positions[i] = self.particle_positions_buffer[i]
-            self.particle_velocities[i] = self.particle_velocities_buffer[i]
-            self.particle_rest_volumes[i] = self.particle_rest_volumes_buffer[i]
-            self.particle_rest_densities[i] = self.particle_rest_densities_buffer[i]
-            self.particle_masses[i] = self.particle_masses_buffer[i]
-            self.particle_densities[i] = self.particle_densities_buffer[i]
-            self.particle_materials[i] = self.particle_materials_buffer[i]
-            self.particle_colors[i] = self.particle_colors_buffer[i]
-            self.particle_is_dynamic[i] = self.is_dynamic_buffer[i]
+            self._copy_particle_data(i, i, False)
             
+    @ti.func
+    def _copy_particle_data(self, src_idx: int, dst_idx: int, to_buffer: ti.i32):
+        if to_buffer:
+            self._copy_to_buffer(src_idx, dst_idx)
+        else:
+            self._copy_from_buffer(src_idx, dst_idx)
+            
+    @ti.func
+    def _copy_to_buffer(self, src_idx: int, dst_idx: int):
+        """复制数据到缓冲区"""
+        self._copy_single_field(self.grid_ids_buffer, self.grid_ids, dst_idx, src_idx)
+        self._copy_single_field(self.particle_object_ids_buffer, self.particle_object_ids, dst_idx, src_idx)
+        self._copy_single_field(self.rigid_particle_original_positions_buffer, self.rigid_particle_original_positions, dst_idx, src_idx)
+        self._copy_single_field(self.particle_positions_buffer, self.particle_positions, dst_idx, src_idx)
+        self._copy_single_field(self.particle_velocities_buffer, self.particle_velocities, dst_idx, src_idx)
+        self._copy_single_field(self.particle_rest_volumes_buffer, self.particle_rest_volumes, dst_idx, src_idx)
+        self._copy_single_field(self.particle_rest_densities_buffer, self.particle_rest_densities, dst_idx, src_idx)
+        self._copy_single_field(self.particle_masses_buffer, self.particle_masses, dst_idx, src_idx)
+        self._copy_single_field(self.particle_densities_buffer, self.particle_densities, dst_idx, src_idx)
+        self._copy_single_field(self.particle_materials_buffer, self.particle_materials, dst_idx, src_idx)
+        self._copy_single_field(self.particle_colors_buffer, self.particle_colors, dst_idx, src_idx)
+        self._copy_single_field(self.is_dynamic_buffer, self.particle_is_dynamic, dst_idx, src_idx)
+        
+    @ti.func
+    def _copy_from_buffer(self, dst_idx: int, src_idx: int):
+        """从缓冲区复制数据"""
+        self._copy_single_field(self.grid_ids, self.grid_ids_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_object_ids, self.particle_object_ids_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.rigid_particle_original_positions, self.rigid_particle_original_positions_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_positions, self.particle_positions_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_velocities, self.particle_velocities_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_rest_volumes, self.particle_rest_volumes_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_rest_densities, self.particle_rest_densities_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_masses, self.particle_masses_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_densities, self.particle_densities_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_materials, self.particle_materials_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_colors, self.particle_colors_buffer, dst_idx, src_idx)
+        self._copy_single_field(self.particle_is_dynamic, self.is_dynamic_buffer, dst_idx, src_idx)
+
+    @ti.func
+    def _copy_single_field(self, dst_field: ti.template(), src_field: ti.template(), 
+                          dst_idx: int, src_idx: int):
+        """复制单个字段的数据"""
+        dst_field[dst_idx] = src_field[src_idx]
+    
     def prepare_neighbor_search(self):
         self.init_grid()
         self.prefix_sum_executor.run(self.grid_num_particles)
@@ -488,22 +562,16 @@ class BaseContainer:
     def for_all_neighbors(self, i, task: ti.template(), ret: ti.template()):
         center_cell = self.pos_to_index(self.particle_positions[i])
         for offset in ti.grouped(ti.ndrange(*((-1, 2),) * self.dim)):
-            neighbor_cell = center_cell + offset
-            grid_index = self.flatten_grid_index(neighbor_cell)
+            grid_index = self.flatten_grid_index(center_cell + offset)
             start_idx = 0
-            if grid_index > 0:
+            if grid_index >= 1:
                 start_idx = self.grid_num_particles[grid_index - 1]
             end_idx = self.grid_num_particles[grid_index]
             for j in range(start_idx, end_idx):
                 if i != j and (self.particle_positions[i] - self.particle_positions[j]).norm() < self.dh:
                     task(i, j, ret)
     
-    @ti.kernel
-    def copy_to_numpy(self, np_arr: ti.types.ndarray(), src_arr: ti.template()):
-        for i in range(self.particle_num[None]):
-            np_arr[i] = src_arr[i]
-    
-    def copy_to_vis_buffer(self, invisible_objects=[], dim=3):
+    def copy_to_vis_buffer(self):
         self.flush_vis_buffer()
         for obj_id in self.object_collection:
             if self.object_visibility[obj_id] == 1:
@@ -524,13 +592,21 @@ class BaseContainer:
     
     def dump(self, obj_id):
         np_object_id = self.particle_object_ids.to_numpy()
-        mask = (np_object_id == obj_id).nonzero()
+        mask = np.where(np_object_id == obj_id)
 
-        np_x = self.particle_positions.to_numpy()[mask]
-        np_v = self.particle_velocities.to_numpy()[mask]
+        return {'position': self.particle_positions.to_numpy()[mask],'velocity': self.particle_velocities.to_numpy()[mask]}
+    
+    def _create_mesh_grid(self, axes):
+        mesh = np.array(np.meshgrid(*axes, sparse=False, indexing='ij'), 
+                       dtype=np.float32)
+        total_points = reduce(lambda x, y: x * y, list(mesh.shape[1:]))
+        return mesh.reshape(-1, total_points).transpose()
 
-        return {
-            'position': np_x,
-            'velocity': np_v
-        }
+    def _create_boundary_mask(self, positions, domain_start, domain_end, thickness):
+        mask = np.zeros(positions.shape[0], dtype=bool)
+        for i in range(self.dim):
+            lower_bound = positions[:, i] <= domain_start[i] + thickness
+            upper_bound = positions[:, i] >= domain_end[i] - thickness
+            mask = mask | lower_bound | upper_bound
+        return mask
     

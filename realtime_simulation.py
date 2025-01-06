@@ -141,8 +141,7 @@ class InteractiveFluidSimulator:
         
     def _update_visualization(self):
         """更新可视化"""
-        self.container.copy_to_vis_buffer(invisible_objects=self.hidden_objects, 
-                                        dim=self.dim)
+        self.container.copy_to_vis_buffer()
         
         if self.dim == 2:
             canvas = self.window.get_canvas()
