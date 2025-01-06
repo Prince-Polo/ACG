@@ -20,11 +20,12 @@ def kernel_gradient(r, h, out_grad):
 class DFSPHSolver(BaseSolver):
     def __init__(self, container: DFSPHContainer):
         super().__init__(container)
-        self.m_max_iterations_v = 1000
-        self.m_max_iterations = 1000
+        print("DFSPH Solver")
         self.m_eps = 1e-5
         self.max_error_V = 0.001
         self.max_error = 0.0001
+        self.m_max_iterations_v = 1000
+        self.m_max_iterations = 1000
 
     @staticmethod
     @cuda.jit

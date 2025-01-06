@@ -9,9 +9,6 @@ from ..rigid_solver import RigidSolver
 @ti.data_oriented
 class BaseSolver():
     def __init__(self, container: BaseContainer):
-        self.container = container
-        self.cfg = container.cfg
-
         # Gravity
         self.g = np.array(self.cfg.get_cfg("gravitation"))
 
@@ -53,11 +50,14 @@ class BaseSolver():
 
         # boundary
         self.boundary = Boundary(self.container)
+        
+        self.container = container
+        self.cfg = container.cfg
 
     @ti.kernel
     def compute_rigid_particle_volume(self):
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_rigid:
+            if self.container.particle_materials[p_i] != self.container.material_fluid:
                 if self.container.particle_positions[p_i][1] <= self.g_upper:
                     volume = self.kernel.weight(0.0, self.container.dh)
                     # Iterate over all neighbors to compute the volume
@@ -75,8 +75,8 @@ class BaseSolver():
     def compute_non_pressure_acceleration(self):
         """计算非压力加速度项"""
         self._process_gravity()
-        self._process_surface()
         self.compute_viscosity_acceleration()
+        self._process_surface()
     
     @ti.kernel
     def _process_gravity(self):
@@ -109,13 +109,13 @@ class BaseSolver():
                 
     @ti.func
     def _compute_tension_contribution(self, p_i: int, p_j: int, acc: ti.template()):
-        pos_i = self.container.particle_positions[p_i]
         pos_j = self.container.particle_positions[p_j]
+        pos_i = self.container.particle_positions[p_i]
+        mass_r = self.container.particle_masses[p_j] / self.container.particle_masses[p_i]
         rel_pos = pos_i - pos_j
         
         dist2 = rel_pos.norm_sqr()
         weight = self._calculate_weight(dist2, rel_pos)
-        mass_r = self.container.particle_masses[p_j] / self.container.particle_masses[p_i]
         
         acc -= self.surface_tension * mass_r * rel_pos * weight
                 
@@ -130,23 +130,23 @@ class BaseSolver():
     @ti.kernel
     def compute_viscosity_acceleration(self):
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_fluid:
+            if self.container.particle_materials[p_i] != self.container.material_rigid:
                 a_i = ti.Vector([0.0 for _ in range(self.container.dim)])
                 self.container.for_all_neighbors(p_i, self.compute_viscosity_acceleration_task, a_i)
                 self.container.particle_accelerations[p_i] += a_i / self.container.particle_rest_densities[p_i]
 
     @ti.func
     def compute_viscosity_acceleration_task(self, p_i, p_j, a_i: ti.template()):
-        pos_i = self.container.particle_positions[p_i]
         pos_j = self.container.particle_positions[p_j]
+        pos_i = self.container.particle_positions[p_i]
         R = pos_i - pos_j
-        nabla_ij = self.kernel.gradient(R, self.container.dh)
         v_xy = ti.math.dot(self.container.particle_velocities[p_i] - self.container.particle_velocities[p_j], R)
+        nabla_ij = self.kernel.gradient(R, self.container.dh)
 
         if self.container.particle_materials[p_j] == self.container.material_fluid:
-            avg_mass = (self.container.particle_masses[p_i] + self.container.particle_masses[p_j])/2
             regular_viscosity = self.viscosity / self.container.particle_densities[p_j]
             normalizer = R.norm()**2 + 0.01 * self.container.dh**2
+            avg_mass = (self.container.particle_masses[p_i] + self.container.particle_masses[p_j])/2
             a_i +=  2 * (self.container.dim + 2) * regular_viscosity * avg_mass * v_xy * nabla_ij / normalizer
 
         elif self.container.particle_materials[p_j] == self.container.material_rigid:
@@ -157,10 +157,10 @@ class BaseSolver():
             a_i += acc
 
             if self.container.particle_is_dynamic[p_j]:
-                object_j = self.container.particle_object_ids[p_j]
                 forces = -acc * self.container.particle_masses[p_i] / self.density_0
-                torques = ti.math.cross(pos_i - self.container.rigid_body_com[object_j], forces)
+                object_j = self.container.particle_object_ids[p_j]
                 self.container.rigid_body_forces[object_j] += forces
+                torques = ti.math.cross(pos_i - self.container.rigid_body_com[object_j], forces)
                 self.container.rigid_body_torques[object_j] += torques
 
     @ti.kernel
@@ -185,7 +185,7 @@ class BaseSolver():
     @ti.kernel
     def _renew_rigid_particle_state(self):
         for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[p_i] == self.container.material_rigid and self.container.particle_is_dynamic[p_i]:
+            if self.container.particle_materials[p_i] != self.container.material_fluid and self.container.particle_is_dynamic[p_i]:
                 object_id = self.container.particle_object_ids[p_i]
                 if self.container.rigid_body_is_dynamic[object_id]:
                     # Calculate the rotated position
@@ -200,7 +200,7 @@ class BaseSolver():
     
         if self.cfg.get_cfg("exportObj"):
             for obj_i in range(self.container.object_num[None]):
-                if self.container.rigid_body_is_dynamic[obj_i] and self.container.object_materials[obj_i] == self.container.material_rigid:
+                if self.container.rigid_body_is_dynamic[obj_i] and self.container.object_materials[obj_i] != self.container.material_fluid:
                     # Update the mesh vertices based on the new rigid body state
                     self.container.object_collection[obj_i]["mesh"].vertices = (self.container.rigid_body_rotations[obj_i].to_numpy() @ (self.container.object_collection[obj_i]["restPosition"] - self.container.object_collection[obj_i]["restCenterOfMass"]).T).T + self.container.rigid_body_com[obj_i].to_numpy()
 
@@ -252,9 +252,9 @@ class BaseSolver():
         pos = self.container.particle_positions[idx]
         vel = self.container.particle_velocities[idx]
         new_pos = pos + self.dt[None] * vel
-        self.container.particle_positions[idx] = new_pos
         if new_pos[1] <= self.g_upper:
             self.container.particle_materials[idx] = self.container.material_fluid
+        self.container.particle_positions[idx] = new_pos
 
     @ti.kernel
     def prepare_emitter(self):
@@ -294,6 +294,6 @@ class BaseSolver():
     
     def step(self):
         self._step()
+        self.compute_rigid_particle_volume()
         self.container.total_time += self.dt[None]
         self.rigid_solver.total_time += self.dt[None]
-        self.compute_rigid_particle_volume()

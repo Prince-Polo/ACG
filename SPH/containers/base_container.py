@@ -4,6 +4,8 @@ from . import ObjectProcessor as op
 from functools import reduce
 from ..utils import SimConfig
 
+cnt = 0
+
 @ti.data_oriented
 class BaseContainer:
     def __init__(self, config: SimConfig, GGUI = False):
@@ -24,6 +26,7 @@ class BaseContainer:
             setattr(self, name, value)
 
         self.domain_size = self.domain_end - self.domain_start
+        self.cnt = ti.field(dtype=int, shape=())
 
         # 粒子参数
         self.radius = self.cfg.get_cfg("particleRadius")
@@ -222,6 +225,7 @@ class BaseContainer:
     
     ######## add all kinds of particles ########    
     def insert_object(self):
+        cnt = 0
         # 处理流体块
         for fluid in self.fluid_blocks:
             obj_id = fluid["objectId"]
@@ -260,14 +264,13 @@ class BaseContainer:
             )
             
             self.present_object.append(obj_id)
+            cnt += 1
         
         # 处理刚体
         for rigid in self.rigid_bodies:
             obj_id = rigid["objectId"]
             
-            if obj_id in self.present_object:
-                continue
-            if rigid["entryTime"] > self.total_time:
+            if obj_id in self.present_object or rigid["entryTime"] > self.total_time:
                 continue
             
             self.object_id_rigid_body.add(obj_id)
@@ -538,45 +541,51 @@ class BaseContainer:
         dst_field[dst_idx] = src_field[src_idx]
     
     def prepare_neighbor_search(self):
+        global cnt
+        if cnt == 0:
+            print("初始化网格")
         self.init_grid()
+        if cnt == 0:
+            print("排序粒子")
         self.prefix_sum_executor.run(self.grid_num_particles)
+        if cnt == 0:
+            print("粒子排序完成")
         self.particles_sort()
+        cnt += 1
     
     @ti.func
     def for_all_neighbors(self, i, task: ti.template(), ret: ti.template()):
         center_cell = self.pos_to_index(self.particle_positions[i])
         for offset in ti.grouped(ti.ndrange(*((-1, 2),) * self.dim)):
-            grid_index = self.flatten_grid_index(center_cell + offset)
             start_idx = 0
+            grid_index = self.flatten_grid_index(center_cell + offset)
+            end_idx = self.grid_num_particles[grid_index]
             if grid_index >= 1:
                 start_idx = self.grid_num_particles[grid_index - 1]
-            end_idx = self.grid_num_particles[grid_index]
             for j in range(start_idx, end_idx):
                 if i != j and (self.particle_positions[i] - self.particle_positions[j]).norm() < self.dh:
                     task(i, j, ret)
+
+    @ti.kernel
+    def flush_vis_buffer(self):
+        self.color_vis_buffer.fill(0.0)
+        self.x_vis_buffer.fill(0.0)
     
     def copy_to_vis_buffer(self):
         self.flush_vis_buffer()
         for obj_id in self.object_collection:
             if self.object_visibility[obj_id] == 1:
                 self._copy_to_vis_buffer(obj_id)
-                    
-    @ti.kernel
-    def flush_vis_buffer(self):
-        self.x_vis_buffer.fill(0.0)
-        self.color_vis_buffer.fill(0.0)
 
     @ti.kernel
     def _copy_to_vis_buffer(self, obj_id: int):
-        assert self.GGUI
         for i in range(self.particle_max_num):
             if self.particle_object_ids[i] == obj_id:
-                self.x_vis_buffer[i] = self.particle_positions[i]
                 self.color_vis_buffer[i] = self.particle_colors[i] / 255.0
+                self.x_vis_buffer[i] = self.particle_positions[i]
     
     def dump(self, obj_id):
-        np_object_id = self.particle_object_ids.to_numpy()
-        mask = np.where(np_object_id == obj_id)
+        mask = np.where(self.particle_object_ids.to_numpy() == obj_id)
 
         return {'position': self.particle_positions.to_numpy()[mask],'velocity': self.particle_velocities.to_numpy()[mask]}
     

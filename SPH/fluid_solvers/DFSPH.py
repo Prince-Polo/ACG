@@ -3,6 +3,8 @@ from .base_solver import BaseSolver
 from ..containers.dfsph_container import DFSPHContainer
 from ..utils.kernel import *
 
+cnt = 0
+
 @ti.data_oriented
 class DFSPHSolver(BaseSolver):
     @ti.kernel
@@ -235,27 +237,50 @@ class DFSPHSolver(BaseSolver):
     
     
     def _step(self):
+        global cnt
+        if cnt == 0:
+            print("计算非压力加速度")
         self.compute_non_pressure_acceleration()
+        if cnt == 0:
+            print("更新速度")
         self.update_fluid_velocity()
+        if cnt == 0:
+            print("修正密度误差")
         self.correct_density_error()
 
+        if cnt == 0:
+            print("更新位置")
         self.update_fluid_position()
 
+        if cnt == 0:
+            print("刚体求解器")
         self.rigid_solver.step()
 
         self.container.insert_object()
         self.rigid_solver.insert_rigid_object()
+        if cnt == 0:
+            print("更新刚体位置")
         self.renew_rigid_particle_state()
 
-        
+        if cnt == 0:
+            print("边界处理")
         self.boundary.enforce_domain_boundary(self.container.material_fluid)
 
+        if cnt == 0:
+            print("邻居搜索")
         self.container.prepare_neighbor_search()
+        if cnt == 0:
+            print("计算密度")
         self.compute_density()
+        if cnt == 0:
+            print("计算因子k")
         self.compute_factor_k()
+        if cnt == 0:
+            print("修正散度误差")
         self.correct_divergence_error()
+        cnt += 1
 
     def prepare(self):
         super().prepare()
-        self.compute_density()
         self.compute_factor_k()
+        self.compute_density()
