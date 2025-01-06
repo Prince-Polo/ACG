@@ -56,10 +56,6 @@ class BaseSolver():
 
     @ti.kernel
     def compute_rigid_particle_volume(self):
-        """
-        Calculate the volume of rigid particles based on the method described in 
-        the paper "Versatile Rigid-Fluid Coupling for Incompressible SPH".
-        """
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_rigid:
                 if self.container.particle_positions[p_i][1] <= self.g_upper:
@@ -73,9 +69,6 @@ class BaseSolver():
 
     @ti.func
     def compute_rigid_particle_volume_task(self, p_i, p_j, volume: ti.template()):
-        """
-        Calculate the contribution to the volume of a rigid particle from its neighbors.
-        """
         pos_i = self.container.particle_positions[p_i]
         if self.container.particle_object_ids[p_j] == self.container.particle_object_ids[p_i]:
             pos_j = self.container.particle_positions[p_j]
@@ -88,37 +81,15 @@ class BaseSolver():
         self._process_gravity()
         self._process_surface()
         self.compute_viscosity_acceleration()
-        
+    
+    @ti.kernel
     def _process_gravity(self):
-        """处理重力加速度"""
-        self.compute_gravity_acceleration()
-        
-    def _process_surface(self):
-        """处理表面张力"""
-        self.compute_surface_tension_acceleration()
-
-    @ti.kernel
-    def compute_gravity_acceleration(self):
-        """重力加速度计算"""
-        self._assign_gravity_to_particles()
-                
-    @ti.func
-    def _assign_gravity_to_particles(self):
         for idx in range(self.container.particle_num[None]):
-            self._update_gravity_acc(idx)
-                
-    @ti.func
-    def _update_gravity_acc(self, p_i: int):
-        if self.container.particle_materials[p_i] == self.container.material_fluid:
-            self.container.particle_accelerations[p_i] = ti.Vector(self.g)
-
+            if self.container.particle_materials[idx] == self.container.material_fluid:
+                self.container.particle_accelerations[idx] = ti.Vector(self.g)
+    
     @ti.kernel
-    def compute_surface_tension_acceleration(self):
-        """表面张力加速度计算"""
-        self._iterate_particles_for_tension()
-                
-    @ti.func
-    def _iterate_particles_for_tension(self):
+    def _process_surface(self):
         for p_i in range(self.container.particle_num[None]):
             self._handle_particle_tension(p_i)
                 
@@ -170,9 +141,6 @@ class BaseSolver():
 
     @ti.kernel
     def compute_viscosity_acceleration(self):
-        """
-        Compute the viscosity acceleration for each fluid particle.
-        """
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_fluid:
                 a_i = ti.Vector([0.0 for _ in range(self.container.dim)])
@@ -207,9 +175,6 @@ class BaseSolver():
 
     @ti.kernel
     def compute_density(self):
-        """
-        Compute density for each particle from the mass of neighbors in the standard SPH way.
-        """
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_fluid:
                 # Initialize density with the self-contribution
@@ -221,9 +186,6 @@ class BaseSolver():
 
     @ti.func
     def compute_density_task(self, p_i, p_j, density: ti.template()):
-        """
-        Compute the density contribution from neighboring particles.
-        """
         pos_i = self.container.particle_positions[p_i]
         pos_j = self.container.particle_positions[p_j]
         R_mod = (pos_i - pos_j).norm()
@@ -232,9 +194,6 @@ class BaseSolver():
 
     @ti.kernel
     def _renew_rigid_particle_state(self):
-        """
-        Update rigid particle state from rigid body state updated by the rigid solver.
-        """
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_rigid and self.container.particle_is_dynamic[p_i]:
                 object_id = self.container.particle_object_ids[p_i]
@@ -247,9 +206,6 @@ class BaseSolver():
                     self.container.particle_velocities[p_i] = self.container.rigid_body_velocities[object_id] + ti.math.cross(self.container.rigid_body_angular_velocities[object_id], p)
 
     def renew_rigid_particle_state(self):
-        """
-        Renew the state of rigid particles and update the mesh if necessary.
-        """
         self._renew_rigid_particle_state()
     
         if self.cfg.get_cfg("exportObj"):
@@ -312,7 +268,6 @@ class BaseSolver():
 
     @ti.kernel
     def prepare_emitter(self):
-        """准备发射器粒子"""
         for p_i in range(self.container.particle_num[None]):
             self._check_and_convert_particle(p_i)
             
