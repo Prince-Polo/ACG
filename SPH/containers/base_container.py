@@ -334,53 +334,37 @@ class BaseContainer:
         """检查粒子是否属于指定的动态物体"""
         return self.particle_object_ids[p_idx] == obj_id and self.particle_is_dynamic[p_idx]
     
-    @ti.func
-    def add_particle(self, p, obj_id, x, v, density, pressure, material, is_dynamic, color):
-        """添加单个粒子"""
-        particle_attrs = {
-            'particle_object_ids': obj_id,
-            'particle_positions': x,
-            'particle_velocities': v,
-            'particle_densities': density,
-            'particle_rest_volumes': self.V0,
-            'particle_rest_densities': density,
-            'particle_masses': self.V0 * density,
-            'particle_pressures': pressure,
-            'particle_materials': material,
-            'particle_is_dynamic': is_dynamic,
-            'particle_colors': color
-        }
-        self._set_particle_attrs(p, particle_attrs)
-        self.rigid_particle_original_positions[p] = x
-
-    @ti.func
-    def _set_particle_attrs(self, p, attrs: ti.template()):
-        """设置粒子属性"""
-        self.particle_object_ids[p] = attrs['particle_object_ids']
-        self.particle_positions[p] = attrs['particle_positions']
-        self.particle_velocities[p] = attrs['particle_velocities']
-        self.particle_densities[p] = attrs['particle_densities']
-        self.particle_rest_volumes[p] = attrs['particle_rest_volumes']
-        self.particle_rest_densities[p] = attrs['particle_rest_densities']
-        self.particle_masses[p] = attrs['particle_masses']
-        self.particle_pressures[p] = attrs['particle_pressures']
-        self.particle_materials[p] = attrs['particle_materials']
-        self.particle_is_dynamic[p] = attrs['particle_is_dynamic']
-        self.particle_colors[p] = attrs['particle_colors']
-    
-    def add_particles(self, object_id: int, new_particles_num: int, new_particles_positions: ti.types.ndarray(), new_particles_velocity: ti.types.ndarray(), new_particle_density: ti.types.ndarray(), new_particle_pressure: ti.types.ndarray(), new_particles_material: ti.types.ndarray(), new_particles_is_dynamic: ti.types.ndarray(),new_particles_color: ti.types.ndarray()):
-        self._add_particles(object_id, new_particles_num, new_particles_positions, new_particles_velocity, new_particle_density, new_particle_pressure, new_particles_material, new_particles_is_dynamic, new_particles_color)
-    
     @ti.kernel
-    def _add_particles(self, object_id: int,new_particles_num: int,new_particles_positions: ti.types.ndarray(), new_particles_velocity: ti.types.ndarray(), new_particle_density: ti.types.ndarray(), new_particle_pressure: ti.types.ndarray(), new_particles_material: ti.types.ndarray(), new_particles_is_dynamic: ti.types.ndarray(), new_particles_color: ti.types.ndarray()):
-        for p in range(self.particle_num[None], self.particle_num[None] + new_particles_num):
+    def add_particles(self, oid: int, pnum: int, pos: ti.types.ndarray(), 
+                    vel: ti.types.ndarray(), dens: ti.types.ndarray(),
+                    press: ti.types.ndarray(), mat: ti.types.ndarray(), 
+                    dyn: ti.types.ndarray(), col: ti.types.ndarray()):
+        """添加多个粒子到系统中"""
+        for p in range(self.particle_num[None], self.particle_num[None] + pnum):
             idx = p - self.particle_num[None]
-            x = ti.Vector([new_particles_positions[idx, d] for d in range(self.dim)])
-            v = ti.Vector([new_particles_velocity[idx, d] for d in range(self.dim)])
-            color = ti.Vector([new_particles_color[idx, i] for i in range(3)])
             
-            self.add_particle(p, object_id, x, v, new_particle_density[idx], new_particle_pressure[idx], new_particles_material[idx],new_particles_is_dynamic[idx],color)
-        self.particle_num[None] += new_particles_num
+            # 构建向量
+            pos_vec = ti.Vector([pos[idx, d] for d in range(self.dim)])
+            vel_vec = ti.Vector([vel[idx, d] for d in range(self.dim)])
+            col_vec = ti.Vector([col[idx, i] for i in range(3)])
+            
+            # 直接设置属性
+            self.particle_object_ids[p] = oid
+            self.particle_positions[p] = pos_vec
+            self.particle_velocities[p] = vel_vec
+            self.particle_densities[p] = dens[idx]
+            self.particle_rest_volumes[p] = self.V0
+            self.particle_rest_densities[p] = dens[idx]
+            self.particle_masses[p] = self.V0 * dens[idx]
+            self.particle_pressures[p] = press[idx]
+            self.particle_materials[p] = mat[idx]
+            self.particle_is_dynamic[p] = dyn[idx]
+            self.particle_colors[p] = col_vec
+            
+            # 更新刚体原始位置
+            self.rigid_particle_original_positions[p] = pos_vec
+            
+        self.particle_num[None] += pnum
         
     def add_cube( self, object_id, start, end, scale, material, is_dynamic=True, color=(0,0,0), density=None, velocity=None, pressure=None,):      
         num_dim = [np.arange(start[i] * scale[i], end[i] * scale[i], self.diameter) for i in range(self.dim)]
