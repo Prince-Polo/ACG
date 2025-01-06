@@ -112,12 +112,8 @@ class BaseSolver():
     @ti.func
     def compute_surface_tension_acceleration_task(self, p_i, p_j, acc: ti.template()):
         """计算单个粒子对的表面张力"""
-        if self._check_fluid_particle(p_j):
+        if self.container.particle_materials[p_j] == self.container.material_fluid:
             self._compute_tension_contribution(p_i, p_j, acc)
-                
-    @ti.func
-    def _check_fluid_particle(self, idx: int) -> ti.i32:
-        return self.container.particle_materials[idx] == self.container.material_fluid
                 
     @ti.func
     def _compute_tension_contribution(self, p_i: int, p_j: int, acc: ti.template()):
