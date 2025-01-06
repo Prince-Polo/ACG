@@ -4,14 +4,6 @@ from ..containers.dfsph_container import DFSPHContainerBaseline
 from .utils import *
 
 class DFSPHSolverBaseline(BaseSolverBaseline):
-    def __init__(self, container:DFSPHContainerBaseline):
-        super().__init__(container)
-        self.m_max_iterations_v = 1000
-        self.m_max_iterations = 1000
-        self.m_eps = 1e-5
-        self.max_error_V = 0.001
-        self.max_error = 0.0001
-    
     def compute_derivative_density(self):
         for i in range(self.container.particle_num):
             if self.container.particle_materials[i] == 1:
@@ -108,22 +100,19 @@ class DFSPHSolverBaseline(BaseSolverBaseline):
                 )
 
     def correct_divergence_error(self):
-        num_iterations = 0
-        average_density_derivative_error = 0.0
+        eta = self.container.max_error_V * self.density_0 / self.dt[None]
+        max_iter = self.container.m_max_iterations
         
-        while num_iterations < 1 or num_iterations < self.m_max_iterations:
+        for iter_count in range(max_iter):
             self.compute_derivative_density()
             self.compute_pressure_for_DFS()
             self.update_velocity_DFS()
-            average_density_derivative_error = self.compute_density_derivative_error()
-
-            eta = self.max_error_V * self.density_0 / self.dt
-            num_iterations += 1
-
-            if average_density_derivative_error <= eta:
+            
+            error = self.compute_density_derivative_error()
+            if error <= eta and iter_count >= 0:
                 break
             
-        print(f"DFSPH - iteration V: {num_iterations} Avg density err: {average_density_derivative_error}")
+        print(f"DFSPH - iteration DFS: {iter_count + 1}, DFS error: {error}")
     
     def update_velocity_DFS(self):
         for i in range(self.container.particle_num):
@@ -139,7 +128,7 @@ class DFSPHSolverBaseline(BaseSolverBaseline):
                         regular_pressure_j = pressure_j / self.container.particle_densities[p_j]
                         pressure_sum = pressure_i + pressure_j
                         
-                        if abs(pressure_sum) > self.m_eps * self.container.particle_densities[i] * self.dt:
+                        if abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[i] * self.dt:
                             nabla_kernel = self.kernel.gradient(
                                 self.container.particle_positions[i] - self.container.particle_positions[p_j], 
                                 self.container.dh
@@ -156,7 +145,7 @@ class DFSPHSolverBaseline(BaseSolverBaseline):
                         pressure_sum = pressure_i + pressure_j
                         density_i = self.container.particle_densities[i]
                         
-                        if abs(pressure_sum) > self.m_eps * self.container.particle_densities[i] * self.dt:
+                        if abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[i] * self.dt:
                             nabla_kernel = self.kernel.gradient(
                                 self.container.particle_positions[i] - self.container.particle_positions[p_j], 
                                 self.container.dh
@@ -190,23 +179,20 @@ class DFSPHSolverBaseline(BaseSolverBaseline):
         return density_error / self.container.particle_num
 
     def correct_density_error(self):
-        num_itr = 0
-        average_density_error = 0.0
-
-        while num_itr < 1 or num_itr < self.m_max_iterations:
+        max_iter = self.container.m_max_iterations
+        eta = self.container.max_error * self.density_0
+        error = 0.0
+        
+        for iter_count in range(max_iter):
             self.compute_predict_density()
             self.compute_pressure_for_CDS()
             self.update_velocity_CDS()
             
-            average_density_error = self.compute_density_error()
-
-            eta = self.max_error
-            num_itr += 1
-
-            if average_density_error <= eta * self.density_0:
+            error = self.compute_density_error()
+            if error <= eta and iter_count >= 1:
                 break
-            
-        print(f"DFSPH - iterations: {num_itr} Avg density Err: {average_density_error :.4f}")
+                
+        print(f"DFSPH - CDS iterations: {iter_count + 1}, CDS Err: {error:.4f}")
     
     def update_velocity_CDS(self):
         for i in range(self.container.particle_num):
@@ -222,7 +208,7 @@ class DFSPHSolverBaseline(BaseSolverBaseline):
                         regular_pressure_j = pressure_j / self.container.particle_densities[p_j]
                         pressure_sum = pressure_i + pressure_j
                         
-                        if abs(pressure_sum) > self.m_eps * self.container.particle_densities[i] * self.dt:
+                        if abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[i] * self.dt:
                             nabla_kernel = self.kernel.gradient(
                                 self.container.particle_positions[i] - self.container.particle_positions[p_j], 
                                 self.container.dh
@@ -239,7 +225,7 @@ class DFSPHSolverBaseline(BaseSolverBaseline):
                         pressure_sum = pressure_i + pressure_j
                         density_i = self.container.particle_densities[i]
                         
-                        if abs(pressure_sum) > self.m_eps * self.container.particle_densities[i] * self.dt:
+                        if abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[i] * self.dt:
                             nabla_kernel = self.kernel.gradient(
                                 self.container.particle_positions[i] - self.container.particle_positions[p_j], 
                                 self.container.dh

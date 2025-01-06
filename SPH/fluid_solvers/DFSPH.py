@@ -5,9 +5,6 @@ from ..utils.kernel import *
 
 @ti.data_oriented
 class DFSPHSolver(BaseSolver):
-    def __init__(self, container:DFSPHContainer):
-        super().__init__(container)
-    
     @ti.kernel
     def compute_derivative_density(self):
         for i in range(self.container.particle_num[None]):
@@ -174,12 +171,11 @@ class DFSPHSolver(BaseSolver):
     
     ################# Constant Density Solver #################
     def correct_density_error(self):
-        """修正密度误差"""
-        min_iter = self.container.m_max_iterations
+        max_iter = self.container.m_max_iterations
         eta = self.container.max_error * self.density_0
         error = 0.0
         
-        for iter_count in range(min_iter):
+        for iter_count in range(max_iter):
             self.compute_predict_density()
             self.compute_pressure_for_CDS()
             self.update_velocity_CDS()

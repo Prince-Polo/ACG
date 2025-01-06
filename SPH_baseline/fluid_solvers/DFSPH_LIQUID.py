@@ -130,7 +130,7 @@ class DFSPH_LSolverBaseline(BaseSolverBaseline):
     ############## Divergence-free Solver ################
     def correct_divergence_error(self):
         num_iterations = 0
-        while num_iterations < 1 or num_iterations < self.m_max_iterations:
+        while num_iterations < 1 or num_iterations < self.container.m_max_iterations:
             self.compute_derivative_density()
             self.compute_pressure_for_DFS()
             self.update_velocity_DFS()
@@ -167,7 +167,7 @@ class DFSPH_LSolverBaseline(BaseSolverBaseline):
             regular_pressure_i = pressure_i / self.container.particle_densities[p_i]
             regular_pressure_j = pressure_j / self.container.particle_densities[p_j]
             pressure_sum = pressure_i + pressure_j
-            if ti.abs(pressure_sum) > self.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
+            if ti.abs(pressure_sum) > self.container.m_eps * self.container.particle_densities[p_i] * self.dt[None]:
                 nabla_kernel = self.kernel.gradient(self.container.particle_positions[p_i] - self.container.particle_positions[p_j], self.container.dh)
                 ret.dv += self.container.particle_masses[p_j] * (regular_pressure_i / self.container.particle_densities[p_i] + regular_pressure_j / self.container.particle_densities[p_j]) * nabla_kernel
         
@@ -220,7 +220,7 @@ class DFSPH_LSolverBaseline(BaseSolverBaseline):
     ################# Constant Density Solver #################
     def correct_density_error(self):
         num_itr = 0
-        while num_itr < 1 or num_itr < self.m_max_iterations:
+        while num_itr < 1 or num_itr < self.container.m_max_iterations:
             self.compute_predict_density()
             self.compute_pressure_for_CDS()
             self.update_velocity_CDS()

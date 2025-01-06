@@ -5,9 +5,6 @@ from ..utils.kernel import *
 
 @ti.data_oriented
 class WCSPHSolver(BaseSolver):
-    def __init__(self, container:BaseContainer):
-        super().__init__(container)
-        
     @ti.kernel
     def compute_pressure(self):
         for p_i in range(self.container.particle_num[None]):
@@ -50,14 +47,15 @@ class WCSPHSolver(BaseSolver):
 
     @ti.func
     def update_rigid_body_task(self, p_i, p_j, ret: ti.template()):
-        if (self.container.particle_materials[p_j] == self.container.material_rigid and 
-            self.container.particle_is_dynamic[p_j]):
+        if (self.container.particle_materials[p_j] == self.container.material_rigid and self.container.particle_is_dynamic[p_j]):
             self._apply_rigid_body_force(p_i, p_j)
 
     @ti.func
     def _compute_fluid_pressure_acc(self, p_i, p_j, den_i, den_j, nabla_ij):
-        pressure_term = (self.container.particle_pressures[p_i] / (den_i * den_i) + 
-                        self.container.particle_pressures[p_j] / (den_j * den_j))
+        regular_pressure_i = self.container.particle_pressures[p_i] / den_i
+        regular_pressure_j = self.container.particle_pressures[p_j] / den_j
+        pressure_term = (regular_pressure_i / den_i + 
+                        regular_pressure_j / den_j)
         return -self.container.particle_masses[p_j] * pressure_term * nabla_ij
 
     @ti.func
@@ -74,10 +72,9 @@ class WCSPHSolver(BaseSolver):
         
         object_j = self.container.particle_object_ids[p_j]
         center_of_mass_j = self.container.rigid_body_com[object_j]
+        regular_pressure_i = self.container.particle_pressures[p_i] / den_i
         
-        force_j = (self.density_0 * self.container.particle_rest_volumes[p_j] * 
-                  self.container.particle_pressures[p_i] / (den_i * den_i) * 
-                  nabla_ij * (self.density_0 * self.container.particle_rest_volumes[p_i]))
+        force_j = self.container.particle_masses[p_i] * regular_pressure_i * nabla_ij * self.container.particle_masses[p_i] / den_i
 
         torque_j = ti.math.cross(pos_i - center_of_mass_j, force_j)
         self.container.rigid_body_forces[object_j] += force_j

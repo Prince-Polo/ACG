@@ -11,3 +11,10 @@ class DFSPHContainerBaseline(BaseContainerBaseline):
         self.particle_dfsph_pressure = np.zeros(self.particle_max_num, dtype=np.float32)
         self.particle_dfsph_pressure_v = np.zeros(self.particle_max_num, dtype=np.float32)
 
+        self.m_max_iterations_v = 1000
+        self.m_max_iterations = 1000
+
+        self.m_eps = 1e-5
+
+        self.max_error_V = 0.001
+        self.max_error = 0.0001

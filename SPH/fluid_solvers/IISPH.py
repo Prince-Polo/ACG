@@ -5,9 +5,6 @@ from ..utils.kernel import *
 
 @ti.data_oriented
 class IISPHSolver(BaseSolver):
-    def __init__(self, container: IISPHContainer):
-        super().__init__(container)
-
     @ti.kernel
     def compute_sum_dij(self):
         for i in range(self.container.particle_num[None]):
