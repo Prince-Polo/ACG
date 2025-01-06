@@ -177,9 +177,7 @@ class DFSPH_LSolver(BaseSolver):
                 if self.container.particle_is_dynamic[p_j]:
                     object_j = self.container.particle_object_ids[p_j]
                     center_of_mass_j = self.container.rigid_body_com[object_j]
-                    force_j = (
-                        self.container.particle_masses[p_j] * (regular_pressure_i / density_i) * nabla_kernel * self.container.particle_masses[p_i] / self.dt[None]
-                    )
+                    force_j = self.container.particle_masses[p_j] * (regular_pressure_i / density_i) * nabla_kernel * self.container.particle_masses[p_i] / self.dt[None]
                     torque_j = ti.math.cross(self.container.particle_positions[p_j] - center_of_mass_j, force_j)
                     self.container.rigid_body_forces[object_j] += force_j
                     self.container.rigid_body_torques[object_j] += torque_j
@@ -269,9 +267,7 @@ class DFSPH_LSolver(BaseSolver):
                 if self.container.particle_is_dynamic[p_j]:
                     object_j = self.container.particle_object_ids[p_j]
                     center_of_mass_j = self.container.rigid_body_com[object_j]
-                    force_j = (
-                        self.container.particle_masses[p_j] * (regular_pressure_i / density_i) * nabla_kernel * self.container.particle_masses[p_i] / self.dt[None]
-                    )
+                    force_j =  self.container.particle_masses[p_j] * (regular_pressure_i / density_i) * nabla_kernel * self.container.particle_masses[p_i] / self.dt[None]
                     torque_j = ti.math.cross(self.container.particle_positions[p_j] - center_of_mass_j, force_j)
                     self.container.rigid_body_forces[object_j] += force_j
                     self.container.rigid_body_torques[object_j] += torque_j
