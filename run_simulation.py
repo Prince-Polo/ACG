@@ -3,7 +3,7 @@ import argparse
 import taichi as ti
 import numpy as np
 from SPH.utils import SimConfig
-from SPH.containers import DFSPHContainer, IISPHContainer, BaseContainer
+from SPH.containers import DFSPHContainer, IISPHContainer, WCSPHContainer
 from SPH.fluid_solvers import DFSPHSolver, IISPHSolver, DFSPH_LSolver, WCSPHSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.8)
@@ -106,7 +106,7 @@ class PhysicsSimulator:
             "dfsph": (DFSPHContainer, DFSPHSolver),
             "iisph": (IISPHContainer, IISPHSolver),
             "dfsph_L": (DFSPHContainer, DFSPH_LSolver),
-            "wcsph": (BaseContainer, WCSPHSolver)
+            "wcsph": (WCSPHContainer, WCSPHSolver)
         }
         
         if method not in solver_map:

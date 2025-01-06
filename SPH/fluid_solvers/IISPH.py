@@ -7,15 +7,12 @@ from ..utils.kernel import *
 class IISPHSolver(BaseSolver):
     def __init__(self, container: IISPHContainer):
         super().__init__(container)
-        self.max_iterations = 2000
-        self.eta = 0.001 # This criterion is given by our reference paper
-        self.omega = 0.08
 
     @ti.kernel
     def compute_sum_dij(self):
         for i in range(self.container.particle_num[None]):
             if self.container.particle_materials[i] == self.container.material_fluid:
-                ret = ti.Vector([0.0, 0.0, 0.0])
+                ret = ti.Vector([0.0 for _ in range(self.container.dim)])
                 self.container.for_all_neighbors(i, self.compute_sum_dij_task, ret)
                 self.container.iisph_sum_dij[i] = ret
               
@@ -23,7 +20,8 @@ class IISPHSolver(BaseSolver):
     def compute_sum_dij_task(self, i, j, ret: ti.template()):
         nabla_kernel = self.kernel.gradient(self.container.particle_positions[i] - self.container.particle_positions[j], self.container.dh)
         
-        ret += self.container.particle_masses[j] * nabla_kernel / self.container.particle_densities[j] / self.container.particle_densities[j]
+        regular_volumn_j = self.container.particle_masses[j] / self.container.particle_densities[j]
+        ret += regular_volumn_j * nabla_kernel / self.container.particle_densities[j]
 
     @ti.kernel
     def compute_aii(self):
@@ -36,9 +34,12 @@ class IISPHSolver(BaseSolver):
     @ti.func
     def compute_aii_task(self, i, j, ret: ti.template()):
         nabla_kernel = self.kernel.gradient(self.container.particle_positions[i] - self.container.particle_positions[j], self.container.dh)
-        d_ii = self.container.particle_masses[i] * nabla_kernel / self.container.particle_densities[i] / self.container.particle_densities[i]
         
-        ret += self.container.particle_masses[j] * ti.math.dot(self.container.iisph_sum_dij[i] + d_ii, nabla_kernel)
+        regular_volumn_i = self.container.particle_masses[i] /self.container.particle_densities[i]
+        d_ii = regular_volumn_i * nabla_kernel / self.container.particle_densities[i]
+        kernel_ii = ti.math.dot(self.container.iisph_sum_dij[i] + d_ii, nabla_kernel)
+        
+        ret += self.container.particle_masses[j] * kernel_ii
 
     @ti.kernel
     def compute_source_term(self):
@@ -46,18 +47,24 @@ class IISPHSolver(BaseSolver):
             if self.container.particle_materials[i] == self.container.material_fluid:
                 ret = 0.0
                 self.container.for_all_neighbors(i, self.compute_source_term_task, ret)
-                self.container.iisph_source[i] = self.container.particle_rest_densities[i] - self.container.particle_densities[i] - self.dt[None] * ret
+                density_error = self.container.particle_rest_densities[i] - self.container.particle_densities[i]
+                self.container.iisph_source[i] = density_error - self.dt[None] * ret
 
     @ti.func
     def compute_source_term_task(self, i, j, ret: ti.template()):
-        nabla_kernel = self.kernel.gradient(self.container.particle_positions[i] - self.container.particle_positions[j], self.container.dh)
-        ret += self.container.particle_masses[j] * ti.math.dot(self.container.particle_velocities[i] - self.container.particle_velocities[j], nabla_kernel)
+        pos_i = self.container.particle_positions[i]
+        pos_j = self.container.particle_positions[j]
+        
+        vel_i = self.container.particle_velocities[i]
+        vel_j = self.container.particle_velocities[j]
+        nabla_kernel = self.kernel.gradient(pos_i - pos_j, self.container.dh)
+        
+        ret += self.container.particle_masses[j] * ti.math.dot(vel_i - vel_j, nabla_kernel)
 
     @ti.kernel
     def init_pressure(self):
         for i in range(self.container.particle_num[None]):
-            if self.container.particle_materials[i] == self.container.material_fluid:
-                self.container.particle_pressures[i] = 0.0
+            self.container.particle_pressures[i] = 0.0
                 
     @ti.kernel
     def compute_pressure_acceleration(self):
@@ -69,15 +76,17 @@ class IISPHSolver(BaseSolver):
                 
     @ti.func
     def compute_pressure_acceleration_task(self, i, j, ret: ti.template()):
-        nabla_kernel = self.kernel.gradient(self.container.particle_positions[i] - self.container.particle_positions[j], self.container.dh)
-        regular_iisph_pressure_i = self.container.particle_pressures[i] / self.container.particle_densities[i] / self.container.particle_densities[i]
-        regular_iisph_pressure_j = self.container.particle_pressures[j] / self.container.particle_densities[j] / self.container.particle_densities[j]
+        pos_i = self.container.particle_positions[i]
+        pos_j = self.container.particle_positions[j]
+        nabla_kernel = self.kernel.gradient(pos_i - pos_j, self.container.dh)
+        regular_iisph_pressure_i = self.container.particle_pressures[i] / self.container.particle_densities[i]
+        regular_iisph_pressure_j = self.container.particle_pressures[j] / self.container.particle_densities[j]
        
         if self.container.particle_materials[j] == self.container.material_fluid:
-            ret -= self.container.particle_masses[j] * (regular_iisph_pressure_i + regular_iisph_pressure_j) * nabla_kernel
+            ret -= self.container.particle_masses[j] * (regular_iisph_pressure_i / self.container.particle_densities[i] + regular_iisph_pressure_j / self.container.particle_densities[j]) * nabla_kernel
             
         elif self.container.particle_materials[j] == self.container.material_rigid:
-            ret -= self.container.particle_masses[j] * regular_iisph_pressure_i * nabla_kernel
+            ret -= self.container.particle_masses[j] * regular_iisph_pressure_i * nabla_kernel / self.container.particle_densities[j]
             
     @ti.kernel
     def compute_Laplacian(self):
@@ -104,33 +113,34 @@ class IISPHSolver(BaseSolver):
             if self.container.particle_materials[i] == self.container.material_fluid:
                 new_pressure = 0.0
                 if self.container.iisph_a_ii[i] > 1e-8 or self.container.iisph_a_ii[i] < -1e-8:
-                    new_pressure = self.container.particle_pressures[i] + (self.omega * (self.container.iisph_source[i] - self.container.iisph_laplacian[i]) / self.container.iisph_a_ii[i])
-                    new_pressure = ti.max(0.0, new_pressure)
+                    extra_pressure = self.container.omega * (self.container.iisph_source[i] - self.container.iisph_laplacian[i]) / self.container.iisph_a_ii[i]
+                    new_pressure = self.container.particle_pressures[i] + extra_pressure
+                    if new_pressure < 0.0:
+                        new_pressure = 0.0
                     
                 self.container.particle_pressures[i] = new_pressure
                 
                 if new_pressure > 1e-8:
                     error += ti.abs((self.container.iisph_laplacian[i] - self.container.iisph_source[i]) / self.container.particle_rest_densities[i])
             
-        if self.container.fluid_particle_num[None] > 0:
-            self.container.density_error[None] = error / self.container.fluid_particle_num[None]
-        else:
-            self.container.density_error[None] = 0.0
+        self.container.density_error[None] = error / self.container.fluid_particle_num[None]
     
     def refine(self):
-        num_iters = 0
+        max_iter = self.container.max_iterations
+        eta = self.container.eta
+        error = 0.0
         
-        while num_iters < self.max_iterations:
+        for iter_count in range(max_iter):
             self.compute_pressure_acceleration()
             self.compute_Laplacian()
             self.update_pressure()
             
-            num_iters += 1
-            
-            if self.container.density_error[None] < self.eta:
+            error = self.container.density_error[None]
+            if error < eta:
                 break
-        
-        print(f"IISPH - iteration: {num_iters} Avg density err: {self.container.density_error[None] * self.density_0}")
+                
+        print(f"IISPH - iteration: {iter_count + 1}, "
+              f"Avg density err: {error * self.density_0:.4f}")
     
     @ti.kernel
     def update_rigid_body_force(self):
@@ -143,12 +153,14 @@ class IISPHSolver(BaseSolver):
     @ti.func  
     def update_rigid_body_task(self, i, j, ret: ti.template()):
         if self.container.rigid_body_is_dynamic[i]:
-            nabla_kernel = self.kernel.gradient(self.container.particle_positions[i] - self.container.particle_positions[j], self.container.dh)
-            regular_iisph_pressure_i = self.container.particle_pressures[i] / self.container.particle_densities[i] / self.container.particle_densities[i]
+            pos_i = self.container.particle_positions[i]
+            pos_j = self.container.particle_positions[j]
+            nabla_kernel = self.kernel.gradient(pos_i - pos_j, self.container.dh)
+            regular_iisph_pressure_i = self.container.particle_pressures[i] / self.container.particle_densities[i]
             object_j = self.container.particle_object_ids[j]
             center_of_mass_j = self.container.rigid_body_com[object_j]
                 
-            force_j = self.container.particle_masses[j] * regular_iisph_pressure_i * nabla_kernel * self.container.particle_masses[i]
+            force_j = self.container.particle_masses[j] * regular_iisph_pressure_i * nabla_kernel * self.container.particle_masses[i] / self.container.particle_densities[i]
             torque_j = ti.math.cross(self.container.particle_positions[i] - center_of_mass_j, force_j)
                 
             self.container.rigid_body_forces[object_j] += force_j

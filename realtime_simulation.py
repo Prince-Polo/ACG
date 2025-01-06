@@ -3,8 +3,8 @@ import argparse
 import taichi as ti
 import numpy as np
 from SPH.utils import SimConfig
-from SPH.containers import DFSPHContainer, IISPHContainer
-from SPH.fluid_solvers import DFSPHSolver, IISPHSolver, DFSPH_LSolver
+from SPH.containers import DFSPHContainer, IISPHContainer, WCSPHContainer
+from SPH.fluid_solvers import DFSPHSolver, IISPHSolver, DFSPH_LSolver, WCSPHSolver
 
 ti.init(arch=ti.gpu, device_memory_fraction=0.8)
 
@@ -111,6 +111,9 @@ class InteractiveFluidSimulator:
         elif method == "dfsph_l":
             self.container = DFSPHContainer(self.cfg, GGUI=True)
             self.solver = DFSPH_LSolver(self.container)
+        elif method == "wcsph":
+            self.container = WCSPHContainer(self.cfg, GGUI=True)
+            self.solver = WCSPHSolver(self.container)
         else:
             raise ValueError(f"不支持的模拟方法: {method}")
             

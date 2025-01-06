@@ -15,3 +15,7 @@ class IISPHContainer(BaseContainer):
         self.iisph_pressure = ti.field(dtype=ti.f32, shape=self.particle_max_num)
         self.iisph_laplacian = ti.field(dtype=ti.f32, shape=self.particle_max_num)    
         self.iisph_sum_dij = ti.Vector.field(self.dim, dtype=ti.f32, shape=self.particle_max_num)
+        
+        self.max_iterations = 2000
+        self.eta = 0.001 # This criterion is given by our reference paper
+        self.omega = 0.08

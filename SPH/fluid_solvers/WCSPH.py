@@ -7,75 +7,82 @@ from ..utils.kernel import *
 class WCSPHSolver(BaseSolver):
     def __init__(self, container:BaseContainer):
         super().__init__(container)
-
-        # wcsph related parameters
-        self.gamma = 7.0
-        self.stiffness = 50000.0
         
     @ti.kernel
     def compute_pressure(self):
-        # use equation of state to compute pressure
         for p_i in range(self.container.particle_num[None]):
             if self.container.particle_materials[p_i] == self.container.material_fluid:
                 rho_i = self.container.particle_densities[p_i]
-                rho_i = ti.max(rho_i, self.density_0)
+                if rho_i < self.density_0:
+                    rho_i = self.density_0
+                
                 self.container.particle_densities[p_i] = rho_i
-                self.container.particle_pressures[p_i] = self.stiffness * (ti.pow(rho_i / self.density_0, self.gamma) - 1.0)
+                rho_ratio = rho_i / self.density_0
+                pressure_term = ti.pow(rho_ratio, self.container.gamma) - 1.0
+                self.container.particle_pressures[p_i] = self.container.stiffness * pressure_term
     
     @ti.kernel
     def compute_pressure_acceleration(self):
-        self.container.particle_accelerations.fill(0.0)
-        for p_i in range(self.container.particle_num[None]):
-            if self.container.particle_is_dynamic[p_i]:
-                self.container.particle_accelerations[p_i] = ti.Vector([0.0 for _ in range(self.container.dim)])
-                if self.container.particle_materials[p_i] == self.container.material_fluid:
-                    ret_i = ti.Vector([0.0 for _ in range(self.container.dim)])
-                    self.container.for_all_neighbors(p_i, self.compute_pressure_acceleration_task, ret_i)
-                    self.container.particle_accelerations[p_i] = ret_i
+        for i in range(self.container.particle_num[None]):
+            if self.container.particle_materials[i] == self.container.material_fluid:
+                ret_i = ti.Vector([0.0, 0.0, 0.0])
+                self.container.for_all_neighbors(i, self.compute_pressure_acceleration_task, ret_i)
+                self.container.particle_accelerations[i] = ret_i
 
     @ti.func
     def compute_pressure_acceleration_task(self, p_i, p_j, ret: ti.template()):
-        # compute pressure acceleration from the gradient of pressure
         pos_i = self.container.particle_positions[p_i]
         pos_j = self.container.particle_positions[p_j]
         den_i = self.container.particle_densities[p_i]
-        R = pos_i - pos_j
-        nabla_ij = self.kernel.gradient(R, self.container.dh)
+        nabla_ij = self.kernel.gradient(pos_i - pos_j, self.container.dh)
 
         if self.container.particle_materials[p_j] == self.container.material_fluid:
             den_j = self.container.particle_densities[p_j]
+            ret += self._compute_fluid_pressure_acc(p_i, p_j, den_i, den_j, nabla_ij)
+        else:
+            ret += self._compute_rigid_pressure_acc(p_i, p_j, den_i, nabla_ij)
 
-            ret += (
-                - self.container.particle_masses[p_j] 
-                * (self.container.particle_pressures[p_i] / (den_i * den_i) + self.container.particle_pressures[p_j] / (den_j * den_j)) 
-                * nabla_ij
-            )
+    @ti.kernel
+    def update_rigid_body_force(self):
+        for i in range(self.container.particle_num[None]):
+            if self.container.particle_materials[i] == self.container.material_fluid:
+                self.container.for_all_neighbors(i, self.update_rigid_body_task, None)
 
-        elif self.container.particle_materials[p_j] == self.container.material_rigid:
-            # use fluid particle pressure, density as rigid particle pressure, density
-            den_j = self.density_0
-            acc = (
-                - self.density_0 * self.container.particle_rest_volumes[p_j] 
-                * self.container.particle_pressures[p_i] / (den_i * den_i)
-                * nabla_ij
-            )
-            ret += acc
+    @ti.func
+    def update_rigid_body_task(self, p_i, p_j, ret: ti.template()):
+        if (self.container.particle_materials[p_j] == self.container.material_rigid and 
+            self.container.particle_is_dynamic[p_j]):
+            self._apply_rigid_body_force(p_i, p_j)
 
-            if self.container.particle_is_dynamic[p_j]:
-                # add force and torque to rigid body
-                object_j = self.container.particle_object_ids[p_j]
-                center_of_mass_j = self.container.rigid_body_com[object_j]
-                force_j = (
-                    self.density_0 * self.container.particle_rest_volumes[p_j] 
-                    * self.container.particle_pressures[p_i] / (den_i * den_i)
-                    * nabla_ij
-                    * (self.density_0 * self.container.particle_rest_volumes[p_i])
-                )
+    @ti.func
+    def _compute_fluid_pressure_acc(self, p_i, p_j, den_i, den_j, nabla_ij):
+        pressure_term = (self.container.particle_pressures[p_i] / (den_i * den_i) + 
+                        self.container.particle_pressures[p_j] / (den_j * den_j))
+        return -self.container.particle_masses[p_j] * pressure_term * nabla_ij
 
-                torque_j = ti.math.cross(pos_i - center_of_mass_j, force_j)
-                self.container.rigid_body_forces[object_j] += force_j
-                self.container.rigid_body_torques[object_j] += torque_j    
-                
+    @ti.func
+    def _compute_rigid_pressure_acc(self, p_i, p_j, den_i, nabla_ij):
+        return (-self.density_0 * self.container.particle_rest_volumes[p_j] * 
+                self.container.particle_pressures[p_i] / (den_i * den_i) * nabla_ij)
+
+    @ti.func
+    def _apply_rigid_body_force(self, p_i, p_j):
+        pos_i = self.container.particle_positions[p_i]
+        pos_j = self.container.particle_positions[p_j]
+        den_i = self.container.particle_densities[p_i]
+        nabla_ij = self.kernel.gradient(pos_i - pos_j, self.container.dh)
+        
+        object_j = self.container.particle_object_ids[p_j]
+        center_of_mass_j = self.container.rigid_body_com[object_j]
+        
+        force_j = (self.density_0 * self.container.particle_rest_volumes[p_j] * 
+                  self.container.particle_pressures[p_i] / (den_i * den_i) * 
+                  nabla_ij * (self.density_0 * self.container.particle_rest_volumes[p_i]))
+
+        torque_j = ti.math.cross(pos_i - center_of_mass_j, force_j)
+        self.container.rigid_body_forces[object_j] += force_j
+        self.container.rigid_body_torques[object_j] += torque_j
+
     def _step(self):
         self.container.prepare_neighbor_search()
         self.compute_density()
@@ -84,6 +91,7 @@ class WCSPHSolver(BaseSolver):
 
         self.compute_pressure()
         self.compute_pressure_acceleration()
+        self.update_rigid_body_force()
         self.update_fluid_velocity()
         self.update_fluid_position()
 
