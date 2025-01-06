@@ -212,7 +212,7 @@ class BaseSolver():
                 
     @ti.func
     def _process_velocity_update(self, p_i: int):
-        if self.container.object_materials[p_i] == self.container.material_fluid:
+        if self.container.particle_materials[p_i] == self.container.material_fluid:
             self._apply_acceleration(p_i)
             
     @ti.func
@@ -230,7 +230,7 @@ class BaseSolver():
     @ti.func
     def _handle_position_update(self, p_i: int):
         pos = self.container.particle_positions[p_i]
-        if self._is_fluid_particle(p_i):
+        if self.container.particle_materials[p_i] == self.container.material_fluid:
             self._update_fluid_pos(p_i)
         elif pos[1] > self.g_upper:
             self._handle_emitter_particle(p_i)
