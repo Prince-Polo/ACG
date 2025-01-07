@@ -9,6 +9,9 @@ from ..rigid_solver import RigidSolver
 @ti.data_oriented
 class BaseSolver():
     def __init__(self, container: BaseContainer):
+        self.container = container
+        self.cfg = container.cfg
+        
         # Gravity
         self.g = np.array(self.cfg.get_cfg("gravitation"))
 

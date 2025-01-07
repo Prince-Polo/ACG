@@ -73,8 +73,8 @@ class RigidSolver():
             )
         }
         
-        # 设置刚体属性
         self.rigid_body_scales[obj_id] = np.array(body_attrs['scale'], dtype=np.float32)
+        
         rigid_attrs = {
             'rigid_body_velocities': body_attrs['velocity'],
             'rigid_body_angular_velocities': np.zeros(3),
@@ -84,7 +84,8 @@ class RigidSolver():
         }
         
         for name, value in rigid_attrs.items():
-            setattr(self.container, name, obj_id, np.array(value, dtype=np.float32))
+            array = getattr(self.container, name)
+            array[obj_id] = np.array(value, dtype=np.float32)
             
         self.present_rigid_object.append(obj_id)
         

@@ -2,8 +2,8 @@ import os
 import argparse
 import numpy as np
 from SPH_baseline.utils import SimConfig
-from SPH_baseline.containers import DFSPHContainerBaseline, IISPHContainerBaseline, BaseContainerBaseline
-from SPH_baseline.fluid_solvers import DFSPHSolverBaseline, IISPHSolverBaseline, DFSPH_LSolverBaseline, WCSPHSolverBaseline
+from SPH_baseline.containers import DFSPHContainerBaseline
+from SPH_baseline.fluid_solvers import DFSPHSolverBaseline
 
 class PhysicsSimulator:
     """物理模拟系统"""
@@ -46,10 +46,7 @@ class PhysicsSimulator:
         """初始化求解器"""
         method = self.config.get_cfg("simulationMethod")
         solver_map = {
-            "dfsph": (DFSPHContainerBaseline, DFSPHSolverBaseline),
-            "iisph": (IISPHContainerBaseline, IISPHSolverBaseline),
-            "dfsph_L": (DFSPHContainerBaseline, DFSPH_LSolverBaseline),
-            "wcsph": (BaseContainerBaseline, WCSPHSolverBaseline)
+            "dfsph": (DFSPHContainerBaseline, DFSPHSolverBaseline)
         }
         
         if method not in solver_map:

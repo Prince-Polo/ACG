@@ -39,6 +39,12 @@ class RigidSolverBaseline():
             [-c[0] * s[1] * c[2] + s[0] * s[2], c[0] * s[1] * s[2] + s[0] * c[2], c[0] * c[1]]
         ])
 
+    def insert_rigid_object(self):
+        for body in self.rigid_bodies:
+            self.init_rigid_body(body)
+        for block in self.rigid_blocks:
+            self.init_rigid_block(block)
+
     def init_rigid_body(self, rigid_body: dict):
         """初始化刚体对象"""
         obj_id = rigid_body["objectId"]

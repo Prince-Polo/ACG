@@ -100,7 +100,8 @@ class DFSPHSolverBaseline(BaseSolverBaseline):
                 )
 
     def correct_divergence_error(self):
-        eta = self.container.max_error_V * self.density_0 / self.dt[None]
+        """修正散度误差"""
+        eta = self.container.max_error_V * self.density_0 / self.dt
         max_iter = self.container.m_max_iterations
         
         for iter_count in range(max_iter):
